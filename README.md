@@ -1,27 +1,18 @@
-# EyePACS Contrastive Learning with ResNet
+# EyePACS Hybrid Contrastive Ordinal Regression
 
-This is a PyTorch starter project for contrastive representation learning on the
-EyePACS diabetic retinopathy dataset. It uses a ResNet encoder with a SimCLR
-projection head, then evaluates the learned features with a linear classifier.
+This project implements the method from `hybrid.pdf`: a hybrid supervised
+contrastive ordinal regression framework for disease severity grading on
+imbalanced medical datasets.
 
-## Project Layout
+The training objective combines:
 
-```text
-.
-├── configs/
-│   ├── linear_eval_resnet18.yaml
-│   └── simclr_resnet18_eyepacs.yaml
-├── scripts/
-│   ├── linear_eval.py
-│   └── pretrain_simclr.py
-└── src/
-    └── eyepacs_contrastive/
-        ├── data.py
-        ├── losses.py
-        ├── models.py
-        ├── transforms.py
-        └── utils.py
-```
+- `PCOL`: prototype-based contrastive ordinal loss.
+- `SCOLw`: weighted supervised contrastive ordinal loss.
+- `RMSE`: regression loss for ordinal disease grade prediction.
+
+The default config follows the paper setting for diabetic retinopathy:
+EfficientNet-V2S, 300 x 300 images, batch size 24, 75 epochs, class-stratified
+batches, ReduceLROnPlateau, and early stopping.
 
 ## Setup
 
@@ -33,50 +24,62 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-## Dataset
+## EyePACS Layout
 
-Download EyePACS from Kaggle after accepting the dataset terms, then place it
-like this:
+Download EyePACS after accepting the Kaggle terms, then place it like this:
 
 ```text
 data/
-└── eyepacs/
-    ├── trainLabels.csv
-    └── train/
-        ├── 10_left.jpeg
-        ├── 10_right.jpeg
-        └── ...
++-- eyepacs/
+    +-- trainLabels.csv
+    +-- train/
+        +-- 10_left.jpeg
+        +-- 10_right.jpeg
+        +-- ...
 ```
 
-The loader expects an image id column such as `image` or `id_code`, and a label
-column such as `level` or `diagnosis`. You can override the column names in the
-YAML configs if needed.
+The CSV should contain an image id column such as `image` or `id_code`, and an
+ordinal label column such as `level` or `diagnosis`. The loader infers these by
+default, or you can set explicit column names in the YAML config.
 
-## SimCLR Pretraining
+## Train One Fold
 
 ```powershell
-python scripts/pretrain_simclr.py --config configs/simclr_resnet18_eyepacs.yaml
+python scripts/train_hybrid_ordinal.py --config configs/hybrid_eyepacs_efficientnet_v2_s.yaml
 ```
 
-Checkpoints are written to `checkpoints/simclr_resnet18/`.
+That trains the fold selected by `split.fold_index`.
 
-## Linear Evaluation
-
-After pretraining, run:
+## Run 10-Fold Cross-Validation
 
 ```powershell
-python scripts/linear_eval.py --config configs/linear_eval_resnet18.yaml
+python scripts/run_cross_validation.py --config configs/hybrid_eyepacs_efficientnet_v2_s.yaml
 ```
 
-The linear evaluation script freezes the ResNet encoder by default and trains a
-single classifier layer for the 5 EyePACS severity grades.
+Each fold is written under `checkpoints/hybrid_eyepacs_efficientnet_v2_s/fold_*`.
+The aggregate file is `cross_validation_metrics.json`.
 
-## Practical Notes
+## Evaluate A Checkpoint
 
-- EyePACS is large. Start with `data.max_samples` in the config for a quick
-  smoke test, then set it to `null` for full training.
-- Contrastive learning benefits from large batches. If your GPU is memory
-  limited, use ResNet-18, lower `data.image_size`, or use gradient accumulation
-  as a later extension.
-- The augmentations include fundus border cropping, random resized crops,
-  flips, color jitter, grayscale, and Gaussian blur.
+```powershell
+python scripts/evaluate_hybrid_ordinal.py `
+  --config configs/hybrid_eyepacs_efficientnet_v2_s.yaml `
+  --checkpoint checkpoints/hybrid_eyepacs_efficientnet_v2_s/best.pt
+```
+
+## Quick Smoke Test
+
+For a fast local test, set `data.max_samples` to a small value in the config.
+Use a value large enough to include at least two samples per class, otherwise
+contrastive positives may be missing for rare classes.
+
+## Paper-Faithful Defaults
+
+- `PCOL` and `SCOLw` follow Eq. (1) and Eq. (2) literally: raw dot products,
+  negative-only denominators, class inverse-frequency weights for `SCOLw`, and
+  unnormalized scalar label distance by default.
+- The default transform follows the PDF implementation details: resize to
+  `300 x 300`, convert to tensor, and keep pixel values in `[0, 1]`.
+- The model uses a shared EfficientNet-V2S encoder with three parallel heads:
+  two projection MLPs with dense layers `1280 -> 128`, and one RMSE-optimized
+  regression head used for inference.

@@ -50,19 +50,8 @@ class AverageMeter:
         return self.total / self.count
 
     def update(self, value: float, n: int = 1) -> None:
-        self.total += float(value) * n
-        self.count += n
-
-
-def accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
-    predictions = logits.argmax(dim=1)
-    return (predictions == targets).float().mean().item()
-
-
-def class_weights_from_targets(targets: np.ndarray, num_classes: int) -> torch.Tensor:
-    counts = np.bincount(targets.astype(int), minlength=num_classes)
-    weights = counts.sum() / (num_classes * np.maximum(counts, 1))
-    return torch.tensor(weights, dtype=torch.float32)
+        self.total += float(value) * int(n)
+        self.count += int(n)
 
 
 def save_checkpoint(path: str | Path, payload: dict[str, Any]) -> None:
@@ -80,5 +69,23 @@ def save_json(path: str | Path, payload: dict[str, Any]) -> None:
 
 def worker_count(num_workers: int) -> int:
     if os.name == "nt":
-        return min(num_workers, 2)
-    return num_workers
+        return min(int(num_workers), 2)
+    return int(num_workers)
+
+
+def build_optimizer(parameters, cfg: dict) -> torch.optim.Optimizer:
+    name = cfg["train"].get("optimizer", "adam").lower()
+    lr = float(cfg["train"]["lr"])
+    weight_decay = float(cfg["train"].get("weight_decay", 0.0))
+    if name == "sgd":
+        return torch.optim.SGD(parameters, lr=lr, momentum=0.9, weight_decay=weight_decay)
+    if name == "adam":
+        return torch.optim.Adam(parameters, lr=lr, weight_decay=weight_decay)
+    if name == "adamw":
+        return torch.optim.AdamW(parameters, lr=lr, weight_decay=weight_decay)
+    raise ValueError(f"Unsupported optimizer '{name}'.")
+
+
+def class_count_string(targets: np.ndarray, num_classes: int) -> str:
+    counts = np.bincount(targets.astype(int), minlength=num_classes)
+    return ", ".join(f"{label}:{int(count)}" for label, count in enumerate(counts))

@@ -1,0 +1,51 @@
+seed: 42
+device: auto
+
+data:
+  labels_csv: data/eyepacs/trainLabels.csv
+  image_root: data/eyepacs/train
+  image_col: null
+  label_col: null
+  subject_col: null
+  image_size: 300
+  normalize: none
+  batch_size: 24
+  num_workers: 4
+  max_samples: null
+  verify_images: false
+  stratified_batches: true
+
+split:
+  num_folds: 10
+  fold_index: 0
+  val_size: 0.2
+  subject_independent: true
+
+model:
+  backbone: efficientnet_v2_s
+  pretrained_imagenet: false
+  projection_hidden_dim: 1280
+  projection_dim: 128
+  regression_hidden_dim: 1280
+  dropout: 0.0
+  num_classes: 5
+
+loss:
+  alpha: 1.0
+  beta: 1.0
+  rmse_weight: 1.0
+  temperature: 0.1
+  ordinal_margin_scale: 1.0
+  normalize_ordinal_distance: false
+  reduction: sum
+
+train:
+  epochs: 75
+  optimizer: adam
+  lr: 0.001
+  weight_decay: 0.0001
+  amp: true
+  lr_plateau_factor: 0.2
+  lr_plateau_patience: 5
+  early_stopping_patience: 13
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s
