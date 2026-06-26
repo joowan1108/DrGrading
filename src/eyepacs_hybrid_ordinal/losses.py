@@ -27,7 +27,7 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
         num_classes: int = 5,
         margin_scale: float = 1.0,
         normalize_ordinal_distance: bool = False,
-        reduction: str = "sum",
+        reduction: str = "mean",
     ) -> None:
         super().__init__()
         if temperature <= 0:
@@ -41,6 +41,7 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, embeddings: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        embeddings = embeddings.float()
         labels = labels.long()
         prototype_labels = torch.unique(labels, sorted=True)
 
@@ -82,7 +83,7 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         num_classes: int = 5,
         margin_scale: float = 1.0,
         normalize_ordinal_distance: bool = False,
-        reduction: str = "sum",
+        reduction: str = "mean",
     ) -> None:
         super().__init__()
         if temperature <= 0:
@@ -101,6 +102,7 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         labels: torch.Tensor,
         sample_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        embeddings = embeddings.float()
         labels = labels.long()
         batch_size = embeddings.shape[0]
 

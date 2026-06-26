@@ -139,6 +139,27 @@ def compute_losses(outputs: dict, targets: torch.Tensor, class_weights: torch.Te
     return {"total": total, "pcol": pcol, "scol": scol, "rmse": rmse}
 
 
+def assert_finite_losses(losses: dict[str, torch.Tensor], outputs: dict[str, torch.Tensor], targets: torch.Tensor) -> None:
+    bad_losses = [name for name, value in losses.items() if not torch.isfinite(value).all()]
+    bad_outputs = [name for name, value in outputs.items() if not torch.isfinite(value).all()]
+    if not bad_losses and not bad_outputs:
+        return
+
+    target_min = int(targets.min().item())
+    target_max = int(targets.max().item())
+    details = {
+        name: float(value.detach().float().cpu().nan_to_num().item())
+        for name, value in losses.items()
+        if value.ndim == 0
+    }
+    raise FloatingPointError(
+        "Non-finite value detected during training. "
+        f"bad_losses={bad_losses}, bad_outputs={bad_outputs}, "
+        f"losses={details}, target_range=({target_min}, {target_max}). "
+        "Try train.amp=false first; if it still happens, lower train.lr."
+    )
+
+
 def train_one_epoch(model, loader, optimizer, scaler, device, amp_enabled, criteria, class_weights, cfg, epoch: int):
     model.train()
     meters = {name: AverageMeter() for name in ["total", "pcol", "scol", "rmse", "accuracy", "mae"]}
@@ -151,9 +172,14 @@ def train_one_epoch(model, loader, optimizer, scaler, device, amp_enabled, crite
         optimizer.zero_grad(set_to_none=True)
         with autocast(enabled=amp_enabled):
             outputs = model(images)
-            losses = compute_losses(outputs, targets, class_weights, criteria, cfg)
+        losses = compute_losses(outputs, targets, class_weights, criteria, cfg)
+        assert_finite_losses(losses, outputs, targets)
 
         scaler.scale(losses["total"]).backward()
+        max_grad_norm = cfg["train"].get("max_grad_norm")
+        if max_grad_norm is not None:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), float(max_grad_norm))
         scaler.step(optimizer)
         scaler.update()
 
@@ -180,7 +206,7 @@ def evaluate(model, loader, device, amp_enabled, cfg):
         targets = targets.to(device, non_blocking=True).long()
         with autocast(enabled=amp_enabled):
             outputs = model(images)
-            loss = rmse_loss(outputs["prediction"], targets.float())
+        loss = rmse_loss(outputs["prediction"], targets.float())
 
         rmse_meter.update(loss.item(), images.size(0))
         predictions.extend(outputs["prediction"].detach().cpu().float().tolist())
@@ -217,14 +243,14 @@ def main() -> None:
             num_classes=num_classes,
             margin_scale=float(loss_cfg.get("ordinal_margin_scale", 1.0)),
             normalize_ordinal_distance=bool(loss_cfg.get("normalize_ordinal_distance", False)),
-            reduction=loss_cfg.get("reduction", "sum"),
+            reduction=loss_cfg.get("reduction", "mean"),
         ),
         "scol": WeightedSupervisedContrastiveOrdinalLoss(
             temperature=float(loss_cfg.get("temperature", 0.1)),
             num_classes=num_classes,
             margin_scale=float(loss_cfg.get("ordinal_margin_scale", 1.0)),
             normalize_ordinal_distance=bool(loss_cfg.get("normalize_ordinal_distance", False)),
-            reduction=loss_cfg.get("reduction", "sum"),
+            reduction=loss_cfg.get("reduction", "mean"),
         ),
     }
 
