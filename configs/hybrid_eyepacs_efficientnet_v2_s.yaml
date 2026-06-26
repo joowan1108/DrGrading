@@ -9,7 +9,7 @@ data:
   subject_col: null
   image_size: 300
   normalize: none
-  batch_size: 24
+  batch_size: 12
   num_workers: 4
   max_samples: null
   verify_images: false

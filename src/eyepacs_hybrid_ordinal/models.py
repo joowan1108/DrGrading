@@ -109,12 +109,14 @@ class HybridOrdinalNet(nn.Module):
         if features.ndim > 2:
             features = torch.flatten(features, start_dim=1)
 
-        return {
-            "features": features,
-            "pcol": self.pcol_head(features),
-            "scol": self.scol_head(features),
-            "prediction": self.regression_head(features),
-        }
+        with torch.amp.autocast(device_type=features.device.type, enabled=False):
+            head_features = features.float()
+            return {
+                "features": head_features,
+                "pcol": self.pcol_head(head_features),
+                "scol": self.scol_head(head_features),
+                "prediction": self.regression_head(head_features),
+            }
 
 
 def clean_state_dict_keys(state_dict: dict[str, torch.Tensor]) -> OrderedDict[str, torch.Tensor]:
