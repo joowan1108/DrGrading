@@ -36,7 +36,7 @@ loss:
   rmse_weight: 1.0
   temperature: 0.1
   ordinal_margin_scale: 1.0
-  normalize_ordinal_distance: false
+  normalize_ordinal_distance: true
   reduction: mean
 
 train:

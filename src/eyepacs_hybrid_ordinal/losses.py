@@ -42,6 +42,7 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
 
     def forward(self, embeddings: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         embeddings = embeddings.float()
+        embeddings = F.normalize(embeddings, dim=1)
         labels = labels.long()
         prototype_labels = torch.unique(labels, sorted=True)
 
@@ -51,7 +52,7 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
         prototypes = []
         for label in prototype_labels:
             prototype = embeddings[labels == label].mean(dim=0)
-            prototypes.append(prototype)
+            prototypes.append(F.normalize(prototype, dim=0))
         prototypes_tensor = torch.stack(prototypes, dim=0)
 
         similarities = embeddings @ prototypes_tensor.T
@@ -103,6 +104,7 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         sample_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         embeddings = embeddings.float()
+        embeddings = F.normalize(embeddings, dim=1)
         labels = labels.long()
         batch_size = embeddings.shape[0]
 
