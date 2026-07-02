@@ -8,12 +8,13 @@ data:
   label_col: null
   subject_col: null
   image_size: 300
-  normalize: none
-  batch_size: 12
+  normalize: imagenet
+  batch_size: 8
   num_workers: 4
   max_samples: null
   verify_images: false
   stratified_batches: true
+  regression_natural_batches: true
 
 split:
   num_folds: 10
@@ -23,7 +24,7 @@ split:
 
 model:
   backbone: efficientnet_v2_s
-  pretrained_imagenet: false
+  pretrained_imagenet: true
   projection_hidden_dim: 1280
   projection_dim: 128
   regression_hidden_dim: 1280
@@ -42,7 +43,7 @@ loss:
 train:
   epochs: 75
   optimizer: adam
-  lr: 0.001
+  lr: 0.0001
   weight_decay: 0.0001
   amp: true
   max_grad_norm: 5.0

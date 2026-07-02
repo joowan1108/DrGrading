@@ -100,37 +100,57 @@ def make_dataloaders(cfg: dict):
         "persistent_workers": workers > 0,
     }
 
+    batch_size = int(data_cfg.get("batch_size", 24))
     if bool(data_cfg.get("stratified_batches", True)):
         batch_sampler = ClassStratifiedBatchSampler(
             train_dataset.targets,
-            batch_size=int(data_cfg.get("batch_size", 24)),
+            batch_size=batch_size,
             seed=seed,
         )
-        train_loader = DataLoader(train_dataset, batch_sampler=batch_sampler, **common_loader_kwargs)
+        contrastive_loader = DataLoader(train_dataset, batch_sampler=batch_sampler, **common_loader_kwargs)
     else:
-        train_loader = DataLoader(
+        contrastive_loader = DataLoader(
             train_dataset,
-            batch_size=int(data_cfg.get("batch_size", 24)),
+            batch_size=batch_size,
             shuffle=True,
             drop_last=True,
             **common_loader_kwargs,
         )
 
+    if bool(data_cfg.get("regression_natural_batches", True)):
+        regression_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            drop_last=True,
+            **common_loader_kwargs,
+        )
+    else:
+        regression_loader = contrastive_loader
+
     val_loader = DataLoader(
         val_dataset,
-        batch_size=int(data_cfg.get("batch_size", 24)),
+        batch_size=batch_size,
         shuffle=False,
         **common_loader_kwargs,
     )
-    return train_loader, val_loader, train_dataset.targets
+    return contrastive_loader, regression_loader, val_loader, train_dataset.targets
 
 
-def compute_losses(outputs: dict, targets: torch.Tensor, class_weights: torch.Tensor, criteria: dict, cfg: dict) -> dict:
+def compute_losses(
+    contrastive_outputs: dict,
+    contrastive_targets: torch.Tensor,
+    regression_outputs: dict,
+    regression_targets: torch.Tensor,
+    class_weights: torch.Tensor,
+    criteria: dict,
+    cfg: dict,
+) -> dict:
     loss_cfg = cfg["loss"]
-    sample_weights = class_weights[targets.long()]
-    pcol = criteria["pcol"](outputs["pcol"], targets)
-    scol = criteria["scol"](outputs["scol"], targets, sample_weights=sample_weights)
-    rmse = rmse_loss(outputs["prediction"], targets.float())
+    sample_weights = class_weights[contrastive_targets.long()]
+    pcol = criteria["pcol"](contrastive_outputs["pcol"], contrastive_targets)
+    scol = criteria["scol"](contrastive_outputs["scol"], contrastive_targets, sample_weights=sample_weights)
+    rmse = rmse_loss(regression_outputs["prediction"], regression_targets.float())
     total = (
         float(loss_cfg.get("alpha", 1.0)) * pcol
         + float(loss_cfg.get("beta", 1.0)) * scol
@@ -160,20 +180,51 @@ def assert_finite_losses(losses: dict[str, torch.Tensor], outputs: dict[str, tor
     )
 
 
-def train_one_epoch(model, loader, optimizer, scaler, device, amp_enabled, criteria, class_weights, cfg, epoch: int):
+def train_one_epoch(
+    model,
+    contrastive_loader,
+    regression_loader,
+    optimizer,
+    scaler,
+    device,
+    amp_enabled,
+    criteria,
+    class_weights,
+    cfg,
+    epoch: int,
+):
     model.train()
     meters = {name: AverageMeter() for name in ["total", "pcol", "scol", "rmse", "accuracy", "mae"]}
-    progress = tqdm(loader, desc=f"train {epoch}", leave=False)
+    progress = tqdm(contrastive_loader, desc=f"train {epoch}", leave=False)
+    regression_iter = iter(regression_loader)
 
-    for images, targets, _ in progress:
-        images = images.to(device, non_blocking=True)
-        targets = targets.to(device, non_blocking=True).long()
+    for contrastive_images, contrastive_targets, _ in progress:
+        try:
+            regression_images, regression_targets, _ = next(regression_iter)
+        except StopIteration:
+            regression_iter = iter(regression_loader)
+            regression_images, regression_targets, _ = next(regression_iter)
+
+        contrastive_images = contrastive_images.to(device, non_blocking=True)
+        contrastive_targets = contrastive_targets.to(device, non_blocking=True).long()
+        regression_images = regression_images.to(device, non_blocking=True)
+        regression_targets = regression_targets.to(device, non_blocking=True).long()
 
         optimizer.zero_grad(set_to_none=True)
         with autocast(enabled=amp_enabled):
-            outputs = model(images)
-        losses = compute_losses(outputs, targets, class_weights, criteria, cfg)
-        assert_finite_losses(losses, outputs, targets)
+            contrastive_outputs = model(contrastive_images)
+            regression_outputs = model(regression_images)
+        losses = compute_losses(
+            contrastive_outputs,
+            contrastive_targets,
+            regression_outputs,
+            regression_targets,
+            class_weights,
+            criteria,
+            cfg,
+        )
+        assert_finite_losses(losses, contrastive_outputs, contrastive_targets)
+        assert_finite_losses(losses, regression_outputs, regression_targets)
 
         scaler.scale(losses["total"]).backward()
         max_grad_norm = cfg["train"].get("max_grad_norm")
@@ -183,8 +234,12 @@ def train_one_epoch(model, loader, optimizer, scaler, device, amp_enabled, crite
         scaler.step(optimizer)
         scaler.update()
 
-        batch_size = images.size(0)
-        metric_values = batch_metrics(outputs["prediction"], targets, int(cfg["model"].get("num_classes", 5)))
+        batch_size = regression_images.size(0)
+        metric_values = batch_metrics(
+            regression_outputs["prediction"],
+            regression_targets,
+            int(cfg["model"].get("num_classes", 5)),
+        )
         for name, loss in losses.items():
             meters[name].update(loss.item(), batch_size)
         meters["accuracy"].update(metric_values["accuracy"], batch_size)
@@ -224,7 +279,7 @@ def main() -> None:
 
     device = resolve_device(cfg.get("device", "auto"))
     output_dir = ensure_dir(cfg["train"]["output_dir"])
-    train_loader, val_loader, train_targets = make_dataloaders(cfg)
+    contrastive_loader, regression_loader, val_loader, train_targets = make_dataloaders(cfg)
 
     model = HybridOrdinalNet(
         backbone=cfg["model"].get("backbone", "efficientnet_v2_s"),
@@ -288,7 +343,8 @@ def main() -> None:
     for epoch in range(1, epochs + 1):
         train_metrics = train_one_epoch(
             model,
-            train_loader,
+            contrastive_loader,
+            regression_loader,
             optimizer,
             scaler,
             device,
