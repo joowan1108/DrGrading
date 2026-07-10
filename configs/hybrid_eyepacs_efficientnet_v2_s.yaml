@@ -14,7 +14,7 @@ data:
   max_samples: null
   verify_images: false
   stratified_batches: true
-  regression_natural_batches: true
+  regression_natural_batches: false
 
 split:
   num_folds: 10
@@ -24,7 +24,7 @@ split:
 
 model:
   backbone: efficientnet_v2_s
-  pretrained_imagenet: true
+  pretrained_imagenet: false
   projection_hidden_dim: 1280
   projection_dim: 128
   regression_hidden_dim: 1280
@@ -38,7 +38,7 @@ loss:
   temperature: 1.0
   ordinal_margin_scale: 1.0
   normalize_ordinal_distance: false
-  reduction: sum
+  reduction: mean
 
 train:
   epochs: 75
