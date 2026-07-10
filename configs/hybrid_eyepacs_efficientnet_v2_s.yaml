@@ -8,8 +8,8 @@ data:
   label_col: null
   subject_col: null
   image_size: 300
-  normalize: imagenet
-  batch_size: 8
+  normalize: none
+  batch_size: 24
   num_workers: 4
   max_samples: null
   verify_images: false
@@ -35,19 +35,19 @@ loss:
   alpha: 1.0
   beta: 1.0
   rmse_weight: 1.0
-  temperature: 0.1
+  temperature: 1.0
   ordinal_margin_scale: 1.0
-  normalize_ordinal_distance: true
-  reduction: mean
+  normalize_ordinal_distance: false
+  reduction: sum
 
 train:
   epochs: 75
   optimizer: adam
-  lr: 0.0001
+  lr: 0.001
   weight_decay: 0.0001
   amp: true
   max_grad_norm: 5.0
   lr_plateau_factor: 0.2
   lr_plateau_patience: 5
   early_stopping_patience: 13
-  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_lr0.001batch24ordianldisteuclidian

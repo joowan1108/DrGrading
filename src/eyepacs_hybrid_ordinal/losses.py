@@ -19,8 +19,6 @@ def ordinal_distance(
 
 
 class PrototypeContrastiveOrdinalLoss(nn.Module):
-    """Prototype-based Contrastive Ordinal Loss from Eq. (1)."""
-
     def __init__(
         self,
         temperature: float = 0.1,
@@ -76,8 +74,6 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
 
 
 class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
-    """Weighted Supervised Contrastive Ordinal Loss from Eq. (2)."""
-
     def __init__(
         self,
         temperature: float = 0.1,
