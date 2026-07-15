@@ -24,7 +24,7 @@ split:
 
 model:
   backbone: efficientnet_v2_s
-  pretrained_imagenet: false
+  pretrained_imagenet: true
   projection_hidden_dim: 1280
   projection_dim: 128
   regression_hidden_dim: 1280

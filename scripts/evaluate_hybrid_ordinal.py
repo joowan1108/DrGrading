@@ -96,6 +96,7 @@ def main() -> None:
     print(f"accuracy={metrics['accuracy']:.4f}")
     print(f"mae={metrics['mae']:.4f}")
     print(f"continuous_mae={metrics['continuous_mae']:.4f}")
+    print(f"rmse={metrics['rmse_loss']:.4f}")
     print("per_class=")
     for label, values in metrics["per_class"].items():
         print(f"  {label}: {values}")

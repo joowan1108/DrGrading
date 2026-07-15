@@ -196,24 +196,29 @@ def train_one_epoch(
     model.train()
     meters = {name: AverageMeter() for name in ["total", "pcol", "scol", "rmse", "accuracy", "mae"]}
     progress = tqdm(contrastive_loader, desc=f"train {epoch}", leave=False)
-    regression_iter = iter(regression_loader)
+    shared_batch = regression_loader is contrastive_loader
+    regression_iter = None if shared_batch else iter(regression_loader)
 
     for contrastive_images, contrastive_targets, _ in progress:
-        try:
-            regression_images, regression_targets, _ = next(regression_iter)
-        except StopIteration:
-            regression_iter = iter(regression_loader)
-            regression_images, regression_targets, _ = next(regression_iter)
-
         contrastive_images = contrastive_images.to(device, non_blocking=True)
         contrastive_targets = contrastive_targets.to(device, non_blocking=True).long()
-        regression_images = regression_images.to(device, non_blocking=True)
-        regression_targets = regression_targets.to(device, non_blocking=True).long()
+
+        if shared_batch:
+            regression_images = contrastive_images
+            regression_targets = contrastive_targets
+        else:
+            try:
+                regression_images, regression_targets, _ = next(regression_iter)
+            except StopIteration:
+                regression_iter = iter(regression_loader)
+                regression_images, regression_targets, _ = next(regression_iter)
+            regression_images = regression_images.to(device, non_blocking=True)
+            regression_targets = regression_targets.to(device, non_blocking=True).long()
 
         optimizer.zero_grad(set_to_none=True)
         with autocast(enabled=amp_enabled):
             contrastive_outputs = model(contrastive_images)
-            regression_outputs = model(regression_images)
+            regression_outputs = contrastive_outputs if shared_batch else model(regression_images)
         losses = compute_losses(
             contrastive_outputs,
             contrastive_targets,
@@ -224,7 +229,8 @@ def train_one_epoch(
             cfg,
         )
         assert_finite_losses(losses, contrastive_outputs, contrastive_targets)
-        assert_finite_losses(losses, regression_outputs, regression_targets)
+        if not shared_batch:
+            assert_finite_losses(losses, regression_outputs, regression_targets)
 
         scaler.scale(losses["total"]).backward()
         max_grad_norm = cfg["train"].get("max_grad_norm")
@@ -252,7 +258,6 @@ def train_one_epoch(
 @torch.no_grad()
 def evaluate(model, loader, device, amp_enabled, cfg):
     model.eval()
-    rmse_meter = AverageMeter()
     predictions: list[float] = []
     targets_all: list[int] = []
 
@@ -261,14 +266,11 @@ def evaluate(model, loader, device, amp_enabled, cfg):
         targets = targets.to(device, non_blocking=True).long()
         with autocast(enabled=amp_enabled):
             outputs = model(images)
-        loss = rmse_loss(outputs["prediction"], targets.float())
 
-        rmse_meter.update(loss.item(), images.size(0))
         predictions.extend(outputs["prediction"].detach().cpu().float().tolist())
         targets_all.extend(targets.detach().cpu().long().tolist())
 
     metrics = aggregate_predictions(predictions, targets_all, int(cfg["model"].get("num_classes", 5)))
-    metrics["rmse_loss"] = rmse_meter.avg
     return metrics
 
 

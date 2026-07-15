@@ -39,7 +39,7 @@ def aggregate_predictions(
     targets: list[int],
     num_classes: int,
 ) -> dict[str, object]:
-    pred_array = np.asarray(predictions, dtype=np.float32)
+    pred_array = np.asarray(predictions, dtype=np.float64)
     target_array = np.asarray(targets, dtype=np.int64)
     finite_mask = np.isfinite(pred_array)
     safe_pred_array = np.nan_to_num(pred_array, nan=0.0, posinf=float(num_classes - 1), neginf=0.0)
@@ -49,6 +49,7 @@ def aggregate_predictions(
         "accuracy": float((class_preds == target_array).mean()),
         "mae": float(np.abs(class_preds - target_array).mean()),
         "continuous_mae": float(np.abs(safe_pred_array - target_array).mean()),
+        "rmse_loss": float(np.sqrt(np.mean(np.square(safe_pred_array - target_array)))),
         "nonfinite_predictions": int((~finite_mask).sum()),
     }
 
