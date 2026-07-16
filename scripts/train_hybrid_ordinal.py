@@ -106,6 +106,7 @@ def make_dataloaders(cfg: dict):
             train_dataset.targets,
             batch_size=batch_size,
             seed=seed,
+            min_samples_per_class=int(data_cfg.get("stratified_min_samples_per_class", 2)),
         )
         contrastive_loader = DataLoader(train_dataset, batch_sampler=batch_sampler, **common_loader_kwargs)
     else:

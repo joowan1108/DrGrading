@@ -189,7 +189,7 @@ def build_split_indices(
 
 
 class ClassStratifiedBatchSampler(Sampler[list[int]]):
-    """Sample balanced batches with replacement to stabilize batch prototypes."""
+    """Guarantee class coverage, then fill each batch using the natural class distribution."""
 
     def __init__(
         self,
@@ -197,6 +197,7 @@ class ClassStratifiedBatchSampler(Sampler[list[int]]):
         batch_size: int,
         num_batches: int | None = None,
         seed: int = 42,
+        min_samples_per_class: int = 2,
     ) -> None:
         if batch_size < 2:
             raise ValueError("batch_size must be at least 2 for contrastive learning.")
@@ -205,6 +206,7 @@ class ClassStratifiedBatchSampler(Sampler[list[int]]):
         self.batch_size = int(batch_size)
         self.num_batches = int(num_batches or np.ceil(len(self.targets) / self.batch_size))
         self.seed = int(seed)
+        self.min_samples_per_class = int(min_samples_per_class)
         self.epoch = 0
 
         self.class_to_indices = {
@@ -214,6 +216,21 @@ class ClassStratifiedBatchSampler(Sampler[list[int]]):
         self.active_classes = [label for label, values in self.class_to_indices.items() if len(values) > 0]
         if len(self.active_classes) < 2:
             raise ValueError("ClassStratifiedBatchSampler needs at least two classes.")
+        if self.min_samples_per_class < 2:
+            raise ValueError("min_samples_per_class must be at least 2 for supervised contrastive positives.")
+
+        guaranteed_samples = self.min_samples_per_class * len(self.active_classes)
+        if guaranteed_samples > self.batch_size:
+            raise ValueError(
+                "batch_size must fit min_samples_per_class samples for every active class: "
+                f"need at least {guaranteed_samples}, got {self.batch_size}."
+            )
+
+        class_counts = np.asarray(
+            [len(self.class_to_indices[label]) for label in self.active_classes],
+            dtype=np.float64,
+        )
+        self.natural_class_probabilities = class_counts / class_counts.sum()
 
     def __len__(self) -> int:
         return self.num_batches
@@ -222,22 +239,37 @@ class ClassStratifiedBatchSampler(Sampler[list[int]]):
         rng = np.random.default_rng(self.seed + self.epoch)
         self.epoch += 1
 
-        base_per_class = max(1, self.batch_size // len(self.active_classes))
+        guaranteed_samples = self.min_samples_per_class * len(self.active_classes)
+        natural_samples = self.batch_size - guaranteed_samples
+
         for _ in range(self.num_batches):
+            samples_by_class = {
+                label: self.min_samples_per_class
+                for label in self.active_classes
+            }
+            if natural_samples > 0:
+                sampled_labels = rng.choice(
+                    self.active_classes,
+                    size=natural_samples,
+                    replace=True,
+                    p=self.natural_class_probabilities,
+                )
+                for label in sampled_labels:
+                    samples_by_class[int(label)] += 1
+
             batch: list[int] = []
-            class_order = rng.permutation(self.active_classes).tolist()
-            for label in class_order:
+            for label in self.active_classes:
                 choices = self.class_to_indices[label]
-                selected = rng.choice(choices, size=base_per_class, replace=len(choices) < base_per_class)
+                sample_count = samples_by_class[label]
+                selected = rng.choice(
+                    choices,
+                    size=sample_count,
+                    replace=len(choices) < sample_count,
+                )
                 batch.extend(selected.astype(int).tolist())
 
-            while len(batch) < self.batch_size:
-                label = int(rng.choice(self.active_classes))
-                choices = self.class_to_indices[label]
-                batch.append(int(rng.choice(choices)))
-
             rng.shuffle(batch)
-            yield batch[: self.batch_size]
+            yield batch
 
 
 def inverse_frequency_class_weights(targets: Sequence[int], num_classes: int) -> np.ndarray:

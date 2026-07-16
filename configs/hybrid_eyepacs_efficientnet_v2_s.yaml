@@ -14,6 +14,7 @@ data:
   max_samples: null
   verify_images: false
   stratified_batches: true
+  stratified_min_samples_per_class: 2
   regression_natural_batches: false
 
 split:

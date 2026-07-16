@@ -126,7 +126,6 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
             sample_weights = sample_weights.to(device=embeddings.device, dtype=embeddings.dtype)
 
         anchor_losses = []
-        anchor_weights = []
 
         for anchor in range(batch_size):
             positive_indices = torch.where((labels == labels[anchor]) & (~self_mask[anchor]))[0]
@@ -143,15 +142,13 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
                 positive_logit = similarities[anchor, positive] / self.temperature
                 losses.append(-(positive_logit - negative_log_denominator))
             anchor_losses.append(torch.stack(losses).mean() * sample_weights[anchor])
-            anchor_weights.append(sample_weights[anchor])
 
         if not anchor_losses:
             return embeddings.sum() * 0.0
 
         losses = torch.stack(anchor_losses)
         if self.reduction == "mean":
-            weights = torch.stack(anchor_weights)
-            return losses.sum() / weights.sum().clamp_min(1e-8)
+            return losses.mean()
         return losses.sum()
 
 
