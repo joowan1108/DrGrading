@@ -87,7 +87,7 @@ class RegressionHead(nn.Module):
 
 
 class HybridOrdinalNet(nn.Module):
-    """Backbone with PCOL, SCOLw, and ordinal regression heads."""
+    """Backbone with PCOL/SCOLw projections and an ordinal regression head."""
 
     def __init__(
         self,
@@ -97,12 +97,21 @@ class HybridOrdinalNet(nn.Module):
         projection_dim: int = 128,
         regression_hidden_dim: int = 1280,
         dropout: float = 0.0,
+        regression_input: str = "backbone",
     ) -> None:
         super().__init__()
+        if regression_input not in {"backbone", "projection_concat"}:
+            raise ValueError(
+                "regression_input must be either 'backbone' or 'projection_concat', "
+                f"got {regression_input!r}."
+            )
+
         self.encoder, self.feature_dim = build_encoder(backbone, pretrained_imagenet)
+        self.regression_input = regression_input
         self.pcol_head = ProjectionHead(self.feature_dim, projection_hidden_dim, projection_dim, dropout=dropout)
         self.scol_head = ProjectionHead(self.feature_dim, projection_hidden_dim, projection_dim, dropout=dropout)
-        self.regression_head = RegressionHead(self.feature_dim, regression_hidden_dim, dropout=dropout)
+        regression_input_dim = 2 * projection_dim if regression_input == "projection_concat" else self.feature_dim
+        self.regression_head = RegressionHead(regression_input_dim, regression_hidden_dim, dropout=dropout)
 
     def forward(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         features = self.encoder(images)
@@ -111,11 +120,18 @@ class HybridOrdinalNet(nn.Module):
 
         with torch.amp.autocast(device_type=features.device.type, enabled=False):
             head_features = features.float()
+            pcol_embedding = self.pcol_head(head_features)
+            scol_embedding = self.scol_head(head_features)
+            if self.regression_input == "projection_concat":
+                regression_features = torch.cat((pcol_embedding, scol_embedding), dim=1)
+            else:
+                regression_features = head_features
+
             return {
                 "features": head_features,
-                "pcol": self.pcol_head(head_features),
-                "scol": self.scol_head(head_features),
-                "prediction": self.regression_head(head_features),
+                "pcol": pcol_embedding,
+                "scol": scol_embedding,
+                "prediction": self.regression_head(regression_features),
             }
 
 

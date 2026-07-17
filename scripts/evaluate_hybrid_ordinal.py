@@ -77,6 +77,7 @@ def main() -> None:
         projection_dim=int(cfg["model"].get("projection_dim", 128)),
         regression_hidden_dim=int(cfg["model"].get("regression_hidden_dim", 1280)),
         dropout=float(cfg["model"].get("dropout", 0.2)),
+        regression_input=cfg["model"].get("regression_input", "backbone"),
     ).to(device)
     checkpoint = load_model_checkpoint(model, args.checkpoint, strict=True)
     model.eval()

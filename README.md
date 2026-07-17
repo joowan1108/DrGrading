@@ -80,6 +80,7 @@ contrastive positives may be missing for rare classes.
   unnormalized scalar label distance by default.
 - The default transform follows the PDF implementation details: resize to
   `300 x 300`, convert to tensor, and keep pixel values in `[0, 1]`.
-- The model uses a shared EfficientNet-V2S encoder with three parallel heads:
-  two projection MLPs with dense layers `1280 -> 128`, and one RMSE-optimized
-  regression head used for inference.
+- The model uses a shared EfficientNet-V2S encoder and two projection MLPs with
+  dense layers `1280 -> 128`. Their embeddings are concatenated into a
+  256-dimensional representation and passed to the RMSE-optimized regression
+  head, so all three objectives are optimized through one connected forward path.
