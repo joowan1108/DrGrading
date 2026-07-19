@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from eyepacs_hybrid_ordinal.data import EyePACSDataset, build_split_indices, load_eyepacs_dataframe
 from eyepacs_hybrid_ordinal.metrics import aggregate_predictions
 from eyepacs_hybrid_ordinal.models import HybridOrdinalNet, load_model_checkpoint
+from eyepacs_hybrid_ordinal.splitting import build_nested_split_indices
 from eyepacs_hybrid_ordinal.transforms import make_eval_transform
 from eyepacs_hybrid_ordinal.utils import load_config, resolve_device, worker_count
 
@@ -42,17 +43,27 @@ def main() -> None:
         subject_col=data_cfg.get("subject_col"),
         max_samples=data_cfg.get("max_samples"),
     )
-    _, val_idx = build_split_indices(
-        frame,
-        seed=int(cfg.get("seed", 42)),
-        val_size=float(split_cfg.get("val_size", 0.2)),
-        num_folds=int(split_cfg.get("num_folds", 0) or 0),
-        fold_index=int(split_cfg.get("fold_index", 0)),
-        subject_independent=bool(split_cfg.get("subject_independent", True)),
-    )
-    val_frame = frame.iloc[val_idx].reset_index(drop=True)
+    num_folds = int(split_cfg.get("num_folds", 0) or 0)
+    if num_folds > 1:
+        _, _, evaluation_idx = build_nested_split_indices(
+            frame,
+            seed=int(cfg.get("seed", 42)),
+            val_size=float(split_cfg.get("val_size", 0.2)),
+            num_folds=num_folds,
+            fold_index=int(split_cfg.get("fold_index", 0)),
+            subject_independent=bool(split_cfg.get("subject_independent", True)),
+        )
+    else:
+        _, evaluation_idx = build_split_indices(
+            frame,
+            seed=int(cfg.get("seed", 42)),
+            val_size=float(split_cfg.get("val_size", 0.2)),
+            num_folds=0,
+            subject_independent=bool(split_cfg.get("subject_independent", True)),
+        )
+    evaluation_frame = frame.iloc[evaluation_idx].reset_index(drop=True)
     dataset = EyePACSDataset(
-        val_frame,
+        evaluation_frame,
         image_root=data_cfg["image_root"],
         transform=make_eval_transform(
             image_size=int(data_cfg.get("image_size", 300)),

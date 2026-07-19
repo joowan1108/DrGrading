@@ -57,15 +57,17 @@ def main() -> None:
 
         metrics_path = Path(fold_cfg["train"]["output_dir"]) / "metrics.json"
         fold_metrics = load_config(metrics_path)
-        best_val = fold_metrics.get("best_val") or fold_metrics["val"]
+        test_metrics = fold_metrics.get("test")
+        if not test_metrics:
+            raise RuntimeError(f"Fold {fold_index} did not produce outer test metrics.")
         fold_results.append(
             {
                 "fold": fold_index,
                 "best_epoch": fold_metrics["best_epoch"],
-                "accuracy": float(best_val["accuracy"]),
-                "mae": float(best_val["mae"]),
-                "continuous_mae": float(best_val["continuous_mae"]),
-                "rmse_loss": float(best_val["rmse_loss"]),
+                "accuracy": float(test_metrics["accuracy"]),
+                "mae": float(test_metrics["mae"]),
+                "continuous_mae": float(test_metrics["continuous_mae"]),
+                "rmse_loss": float(test_metrics["rmse_loss"]),
             }
         )
 

@@ -48,7 +48,11 @@ default, or you can set explicit column names in the YAML config.
 python scripts/train_hybrid_ordinal.py --config configs/hybrid_eyepacs_efficientnet_v2_s.yaml
 ```
 
-That trains the fold selected by `split.fold_index`.
+That reserves the outer fold selected by `split.fold_index` for testing. The
+remaining subjects are split into training and validation sets using
+`split.val_size`; only the inner validation set controls the LR scheduler,
+early stopping, and best-checkpoint selection. After training, `best.pt` is
+evaluated once on the untouched outer test fold.
 
 ## Run 10-Fold Cross-Validation
 
@@ -56,8 +60,9 @@ That trains the fold selected by `split.fold_index`.
 python scripts/run_cross_validation.py --config configs/hybrid_eyepacs_efficientnet_v2_s.yaml
 ```
 
-Each fold is written under `checkpoints/hybrid_eyepacs_efficientnet_v2_s/fold_*`.
-The aggregate file is `cross_validation_metrics.json`.
+Each fold is written under the configured output directory in `fold_*`. The
+aggregate `cross_validation_metrics.json` contains outer-test metrics, not the
+inner-validation metrics used for model selection.
 
 ## Evaluate A Checkpoint
 
@@ -75,8 +80,8 @@ contrastive positives may be missing for rare classes.
 
 ## Paper-Faithful Defaults
 
-- `PCOL` and `SCOLw` follow Eq. (1) and Eq. (2) literally: raw dot products,
-  negative-only denominators, class inverse-frequency weights for `SCOLw`, and
+- `PCOL` and `SCOLw` follow Eq. (1) and Eq. (2): negative-only denominators,
+  dynamic batch-level inverse-frequency sample weights for `SCOLw`, and
   unnormalized scalar label distance by default.
 - The default transform follows the PDF implementation details: resize to
   `300 x 300`, convert to tensor, and keep pixel values in `[0, 1]`.

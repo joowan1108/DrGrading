@@ -52,4 +52,4 @@ train:
   lr_plateau_factor: 0.2
   lr_plateau_patience: 5
   early_stopping_patience: 13
-  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_projection_concat
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_projection_concat_nested_cv

@@ -24,7 +24,8 @@ from eyepacs_hybrid_ordinal.losses import (
     rmse_loss,
 )
 from eyepacs_hybrid_ordinal.metrics import aggregate_predictions, batch_metrics
-from eyepacs_hybrid_ordinal.models import HybridOrdinalNet
+from eyepacs_hybrid_ordinal.models import HybridOrdinalNet, load_model_checkpoint
+from eyepacs_hybrid_ordinal.splitting import build_nested_split_indices
 from eyepacs_hybrid_ordinal.transforms import make_eval_transform, make_train_transform
 from eyepacs_hybrid_ordinal.weighting import batch_inverse_frequency_sample_weights
 from eyepacs_hybrid_ordinal.utils import (
@@ -60,19 +61,33 @@ def make_dataloaders(cfg: dict):
         subject_col=data_cfg.get("subject_col"),
         max_samples=data_cfg.get("max_samples"),
     )
-    train_idx, val_idx = build_split_indices(
-        frame,
-        seed=seed,
-        val_size=float(split_cfg.get("val_size", 0.2)),
-        num_folds=int(split_cfg.get("num_folds", 0) or 0),
-        fold_index=int(split_cfg.get("fold_index", 0)),
-        subject_independent=bool(split_cfg.get("subject_independent", True)),
-    )
+    num_folds = int(split_cfg.get("num_folds", 0) or 0)
+    if num_folds > 1:
+        train_idx, val_idx, test_idx = build_nested_split_indices(
+            frame,
+            seed=seed,
+            val_size=float(split_cfg.get("val_size", 0.2)),
+            num_folds=num_folds,
+            fold_index=int(split_cfg.get("fold_index", 0)),
+            subject_independent=bool(split_cfg.get("subject_independent", True)),
+        )
+    else:
+        train_idx, val_idx = build_split_indices(
+            frame,
+            seed=seed,
+            val_size=float(split_cfg.get("val_size", 0.2)),
+            num_folds=0,
+            subject_independent=bool(split_cfg.get("subject_independent", True)),
+        )
+        test_idx = None
 
     train_frame = frame.iloc[train_idx].reset_index(drop=True)
     val_frame = frame.iloc[val_idx].reset_index(drop=True)
+    test_frame = frame.iloc[test_idx].reset_index(drop=True) if test_idx is not None else None
     print(f"train samples={len(train_frame)} classes={class_count_string(train_frame['_label'].to_numpy(), num_classes)}")
     print(f"val samples={len(val_frame)} classes={class_count_string(val_frame['_label'].to_numpy(), num_classes)}")
+    if test_frame is not None:
+        print(f"test samples={len(test_frame)} classes={class_count_string(test_frame['_label'].to_numpy(), num_classes)}")
 
     train_dataset = EyePACSDataset(
         train_frame,
@@ -92,6 +107,17 @@ def make_dataloaders(cfg: dict):
         ),
         verify_images=bool(data_cfg.get("verify_images", False)),
     )
+    test_dataset = None
+    if test_frame is not None:
+        test_dataset = EyePACSDataset(
+            test_frame,
+            image_root=data_cfg["image_root"],
+            transform=make_eval_transform(
+                image_size=int(data_cfg.get("image_size", 300)),
+                normalize=data_cfg.get("normalize", "none"),
+            ),
+            verify_images=bool(data_cfg.get("verify_images", False)),
+        )
 
     workers = worker_count(int(data_cfg.get("num_workers", 0)))
     common_loader_kwargs = {
@@ -135,7 +161,15 @@ def make_dataloaders(cfg: dict):
         shuffle=False,
         **common_loader_kwargs,
     )
-    return contrastive_loader, regression_loader, val_loader
+    test_loader = None
+    if test_dataset is not None:
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            **common_loader_kwargs,
+        )
+    return contrastive_loader, regression_loader, val_loader, test_loader
 
 
 def compute_losses(
@@ -265,12 +299,12 @@ def train_one_epoch(
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, amp_enabled, cfg):
+def evaluate(model, loader, device, amp_enabled, cfg, description: str = "val"):
     model.eval()
     predictions: list[float] = []
     targets_all: list[int] = []
 
-    for images, targets, _ in tqdm(loader, desc="val", leave=False):
+    for images, targets, _ in tqdm(loader, desc=description, leave=False):
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True).long()
         with autocast(enabled=amp_enabled):
@@ -290,7 +324,7 @@ def main() -> None:
 
     device = resolve_device(cfg.get("device", "auto"))
     output_dir = ensure_dir(cfg["train"]["output_dir"])
-    contrastive_loader, regression_loader, val_loader = make_dataloaders(cfg)
+    contrastive_loader, regression_loader, val_loader, test_loader = make_dataloaders(cfg)
 
     model = HybridOrdinalNet(
         backbone=cfg["model"].get("backbone", "efficientnet_v2_s"),
@@ -344,8 +378,12 @@ def main() -> None:
     best_epoch = 0
     bad_epochs = 0
     epochs = int(cfg["train"].get("epochs", 75))
+    final_epoch = 0
+    train_metrics = {}
+    val_metrics = {}
 
     for epoch in range(1, epochs + 1):
+        final_epoch = epoch
         train_metrics = train_one_epoch(
             model,
             contrastive_loader,
@@ -419,6 +457,30 @@ def main() -> None:
 
     if writer is not None:
         writer.close()
+
+    test_metrics = None
+    if test_loader is not None:
+        load_model_checkpoint(model, output_dir / "best.pt", strict=True)
+        test_metrics = evaluate(model, test_loader, device, amp_enabled, cfg, description="test")
+        print(
+            f"outer test (best epoch {best_epoch:03d}): "
+            f"rmse={test_metrics['rmse_loss']:.4f} "
+            f"acc={test_metrics['accuracy']:.4f} "
+            f"mae={test_metrics['mae']:.4f}"
+        )
+
+    save_json(
+        output_dir / "metrics.json",
+        {
+            "epoch": final_epoch,
+            "best_epoch": best_epoch,
+            "best_val_rmse_loss": best_val_loss,
+            "best_val": best_val_metrics,
+            "train": train_metrics,
+            "val": val_metrics,
+            "test": test_metrics,
+        },
+    )
 
 
 if __name__ == "__main__":
