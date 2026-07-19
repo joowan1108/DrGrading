@@ -16,7 +16,6 @@ from eyepacs_hybrid_ordinal.data import (
     ClassStratifiedBatchSampler,
     EyePACSDataset,
     build_split_indices,
-    inverse_frequency_class_weights,
     load_eyepacs_dataframe,
 )
 from eyepacs_hybrid_ordinal.losses import (
@@ -27,6 +26,7 @@ from eyepacs_hybrid_ordinal.losses import (
 from eyepacs_hybrid_ordinal.metrics import aggregate_predictions, batch_metrics
 from eyepacs_hybrid_ordinal.models import HybridOrdinalNet
 from eyepacs_hybrid_ordinal.transforms import make_eval_transform, make_train_transform
+from eyepacs_hybrid_ordinal.weighting import batch_inverse_frequency_sample_weights
 from eyepacs_hybrid_ordinal.utils import (
     AverageMeter,
     build_optimizer,
@@ -135,7 +135,7 @@ def make_dataloaders(cfg: dict):
         shuffle=False,
         **common_loader_kwargs,
     )
-    return contrastive_loader, regression_loader, val_loader, train_dataset.targets
+    return contrastive_loader, regression_loader, val_loader
 
 
 def compute_losses(
@@ -143,14 +143,17 @@ def compute_losses(
     contrastive_targets: torch.Tensor,
     regression_outputs: dict,
     regression_targets: torch.Tensor,
-    class_weights: torch.Tensor,
+    contrastive_sample_weights: torch.Tensor,
     criteria: dict,
     cfg: dict,
 ) -> dict:
     loss_cfg = cfg["loss"]
-    sample_weights = class_weights[contrastive_targets.long()]
     pcol = criteria["pcol"](contrastive_outputs["pcol"], contrastive_targets)
-    scol = criteria["scol"](contrastive_outputs["scol"], contrastive_targets, sample_weights=sample_weights)
+    scol = criteria["scol"](
+        contrastive_outputs["scol"],
+        contrastive_targets,
+        sample_weights=contrastive_sample_weights,
+    )
     rmse = rmse_loss(regression_outputs["prediction"], regression_targets.float())
     total = (
         float(loss_cfg.get("alpha", 1.0)) * pcol
@@ -190,7 +193,6 @@ def train_one_epoch(
     device,
     amp_enabled,
     criteria,
-    class_weights,
     cfg,
     epoch: int,
 ):
@@ -201,6 +203,12 @@ def train_one_epoch(
     regression_iter = None if shared_batch else iter(regression_loader)
 
     for contrastive_images, contrastive_targets, _ in progress:
+        contrastive_sample_weights = torch.from_numpy(
+            batch_inverse_frequency_sample_weights(
+                contrastive_targets.numpy(),
+                num_classes=int(cfg["model"].get("num_classes", 5)),
+            )
+        ).to(device, non_blocking=True)
         contrastive_images = contrastive_images.to(device, non_blocking=True)
         contrastive_targets = contrastive_targets.to(device, non_blocking=True).long()
 
@@ -225,7 +233,7 @@ def train_one_epoch(
             contrastive_targets,
             regression_outputs,
             regression_targets,
-            class_weights,
+            contrastive_sample_weights,
             criteria,
             cfg,
         )
@@ -282,7 +290,7 @@ def main() -> None:
 
     device = resolve_device(cfg.get("device", "auto"))
     output_dir = ensure_dir(cfg["train"]["output_dir"])
-    contrastive_loader, regression_loader, val_loader, train_targets = make_dataloaders(cfg)
+    contrastive_loader, regression_loader, val_loader = make_dataloaders(cfg)
 
     model = HybridOrdinalNet(
         backbone=cfg["model"].get("backbone", "efficientnet_v2_s"),
@@ -312,13 +320,6 @@ def main() -> None:
             reduction=loss_cfg.get("reduction", "mean"),
         ),
     }
-
-    class_weights = torch.tensor(
-        inverse_frequency_class_weights(train_targets, num_classes),
-        dtype=torch.float32,
-        device=device,
-    )
-    print(f"class_weights={class_weights.detach().cpu().numpy().round(4).tolist()}")
 
     optimizer = build_optimizer(model.parameters(), cfg)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -354,7 +355,6 @@ def main() -> None:
             device,
             amp_enabled,
             criteria,
-            class_weights,
             cfg,
             epoch,
         )
