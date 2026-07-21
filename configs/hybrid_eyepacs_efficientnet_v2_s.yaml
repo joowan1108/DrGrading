@@ -37,6 +37,7 @@ loss:
   alpha: 1.0
   beta: 1.0
   rmse_weight: 1.0
+  overprediction_weight: 2.0
   temperature: 1.0
   ordinal_margin_scale: 1.0
   normalize_ordinal_distance: false

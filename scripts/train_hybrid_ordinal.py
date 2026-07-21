@@ -188,7 +188,11 @@ def compute_losses(
         contrastive_targets,
         sample_weights=contrastive_sample_weights,
     )
-    rmse = rmse_loss(regression_outputs["prediction"], regression_targets.float())
+    rmse = rmse_loss(
+        regression_outputs["prediction"],
+        regression_targets.float(),
+        overprediction_weight=float(loss_cfg.get("overprediction_weight", 1.0)),
+    )
     total = (
         float(loss_cfg.get("alpha", 1.0)) * pcol
         + float(loss_cfg.get("beta", 1.0)) * scol

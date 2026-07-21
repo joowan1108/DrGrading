@@ -152,5 +152,19 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         return losses.sum()
 
 
-def rmse_loss(predictions: torch.Tensor, targets: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    return torch.sqrt(F.mse_loss(predictions.float(), targets.float()) + eps)
+def rmse_loss(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    eps: float = 1e-8,
+    overprediction_weight: float = 1.0,
+) -> torch.Tensor:
+    if overprediction_weight < 1.0:
+        raise ValueError("overprediction_weight must be greater than or equal to 1.0.")
+
+    errors = predictions.float() - targets.float()
+    weights = torch.where(
+        errors > 0,
+        torch.as_tensor(overprediction_weight, device=errors.device, dtype=errors.dtype),
+        torch.ones((), device=errors.device, dtype=errors.dtype),
+    )
+    return torch.sqrt(torch.mean(weights * errors.square()) + eps)
