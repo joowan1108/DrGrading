@@ -109,6 +109,13 @@ def main() -> None:
     print(f"mae={metrics['mae']:.4f}")
     print(f"continuous_mae={metrics['continuous_mae']:.4f}")
     print(f"rmse={metrics['rmse_loss']:.4f}")
+    print(f"correct_rate={metrics['correct_rate']:.4f}")
+    print(f"adjacent_rate={metrics['adjacent_rate']:.4f}")
+    print(f"non_adjacent_rate={metrics['non_adjacent_rate']:.4f}")
+    print(f"underdiagnosis_rate={metrics['underdiagnosis_rate']:.4f}")
+    print(f"overdiagnosis_rate={metrics['overdiagnosis_rate']:.4f}")
+    print(f"mean_underdiagnosis_distance={metrics['mean_underdiagnosis_distance']:.4f}")
+    print(f"mean_overdiagnosis_distance={metrics['mean_overdiagnosis_distance']:.4f}")
     print("per_class=")
     for label, values in metrics["per_class"].items():
         print(f"  {label}: {values}")

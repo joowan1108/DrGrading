@@ -5,6 +5,8 @@ from collections import defaultdict
 import numpy as np
 import torch
 
+from .ordinal_metrics import ordinal_error_distribution
+
 
 def ordinal_class_predictions(predictions: torch.Tensor, num_classes: int) -> torch.Tensor:
     predictions = torch.nan_to_num(
@@ -52,17 +54,36 @@ def aggregate_predictions(
         "rmse_loss": float(np.sqrt(np.mean(np.square(safe_pred_array - target_array)))),
         "nonfinite_predictions": int((~finite_mask).sum()),
     }
+    metrics.update(ordinal_error_distribution(class_preds, target_array))
 
     per_class = defaultdict(dict)
     for label in range(num_classes):
         mask = target_array == label
         if not mask.any():
-            per_class[str(label)] = {"support": 0, "accuracy": None, "mae": None}
+            per_class[str(label)] = {
+                "support": 0,
+                "accuracy": None,
+                "mae": None,
+                "correct_count": 0,
+                "adjacent_count": 0,
+                "non_adjacent_count": 0,
+                "correct_rate": None,
+                "adjacent_rate": None,
+                "non_adjacent_rate": None,
+                "underdiagnosis_count": 0,
+                "overdiagnosis_count": 0,
+                "underdiagnosis_rate": None,
+                "overdiagnosis_rate": None,
+                "mean_underdiagnosis_distance": None,
+                "mean_overdiagnosis_distance": None,
+            }
             continue
+        distribution = ordinal_error_distribution(class_preds[mask], target_array[mask])
         per_class[str(label)] = {
             "support": int(mask.sum()),
             "accuracy": float((class_preds[mask] == target_array[mask]).mean()),
             "mae": float(np.abs(class_preds[mask] - target_array[mask]).mean()),
+            **distribution,
         }
     metrics["per_class"] = dict(per_class)
     return metrics

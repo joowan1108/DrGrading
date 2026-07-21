@@ -62,7 +62,12 @@ python scripts/run_cross_validation.py --config configs/hybrid_eyepacs_efficient
 
 Each fold is written under the configured output directory in `fold_*`. The
 aggregate `cross_validation_metrics.json` contains outer-test metrics, not the
-inner-validation metrics used for model selection.
+inner-validation metrics used for model selection. It also reports overall and
+per-class correct, adjacent-error (`|prediction - target| = 1`), and
+non-adjacent-error (`|prediction - target| > 1`) rates for comparison with the
+paper's stacked-bar analysis. Directional metrics define underdiagnosis as
+`prediction < target` and overdiagnosis as `prediction > target`; rates and
+mean class distances are reported overall and per class for every outer fold.
 
 ## Evaluate A Checkpoint
 

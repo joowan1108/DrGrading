@@ -68,8 +68,36 @@ def main() -> None:
                 "mae": float(test_metrics["mae"]),
                 "continuous_mae": float(test_metrics["continuous_mae"]),
                 "rmse_loss": float(test_metrics["rmse_loss"]),
+                "correct_rate": float(test_metrics["correct_rate"]),
+                "adjacent_rate": float(test_metrics["adjacent_rate"]),
+                "non_adjacent_rate": float(test_metrics["non_adjacent_rate"]),
+                "underdiagnosis_rate": float(test_metrics["underdiagnosis_rate"]),
+                "overdiagnosis_rate": float(test_metrics["overdiagnosis_rate"]),
+                "mean_underdiagnosis_distance": float(test_metrics["mean_underdiagnosis_distance"]),
+                "mean_overdiagnosis_distance": float(test_metrics["mean_overdiagnosis_distance"]),
+                "per_class": test_metrics["per_class"],
             }
         )
+
+    per_class = {}
+    for label in range(int(cfg["model"].get("num_classes", 5))):
+        label_key = str(label)
+        per_class[label_key] = {
+            metric: mean_std(
+                [float(item["per_class"][label_key][metric]) for item in fold_results]
+            )
+            for metric in [
+                "accuracy",
+                "mae",
+                "correct_rate",
+                "adjacent_rate",
+                "non_adjacent_rate",
+                "underdiagnosis_rate",
+                "overdiagnosis_rate",
+                "mean_underdiagnosis_distance",
+                "mean_overdiagnosis_distance",
+            ]
+        }
 
     aggregate = {
         "folds": fold_results,
@@ -77,10 +105,33 @@ def main() -> None:
         "mae": mean_std([item["mae"] for item in fold_results]),
         "continuous_mae": mean_std([item["continuous_mae"] for item in fold_results]),
         "rmse_loss": mean_std([item["rmse_loss"] for item in fold_results]),
+        "correct_rate": mean_std([item["correct_rate"] for item in fold_results]),
+        "adjacent_rate": mean_std([item["adjacent_rate"] for item in fold_results]),
+        "non_adjacent_rate": mean_std([item["non_adjacent_rate"] for item in fold_results]),
+        "underdiagnosis_rate": mean_std([item["underdiagnosis_rate"] for item in fold_results]),
+        "overdiagnosis_rate": mean_std([item["overdiagnosis_rate"] for item in fold_results]),
+        "mean_underdiagnosis_distance": mean_std(
+            [item["mean_underdiagnosis_distance"] for item in fold_results]
+        ),
+        "mean_overdiagnosis_distance": mean_std(
+            [item["mean_overdiagnosis_distance"] for item in fold_results]
+        ),
+        "per_class": per_class,
     }
     save_json(base_output_dir / "cross_validation_metrics.json", aggregate)
     print("cross-validation summary")
-    for metric in ["accuracy", "mae", "continuous_mae", "rmse_loss"]:
+    for metric in [
+        "accuracy",
+        "mae",
+        "continuous_mae",
+        "rmse_loss",
+        "adjacent_rate",
+        "non_adjacent_rate",
+        "underdiagnosis_rate",
+        "overdiagnosis_rate",
+        "mean_underdiagnosis_distance",
+        "mean_overdiagnosis_distance",
+    ]:
         values = aggregate[metric]
         print(f"{metric}: {values['mean']:.4f} +/- {values['std']:.4f}")
 
