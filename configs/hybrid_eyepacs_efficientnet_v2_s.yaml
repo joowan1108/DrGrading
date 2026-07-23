@@ -32,13 +32,20 @@ model:
   regression_hidden_dim: 1280
   dropout: 0.0
   num_classes: 5
+  ag_soft_hidden_dim: 128
 
 loss:
   alpha: 1.0
   beta: 1.0
   rmse_weight: 1.0
   overprediction_weight: 1.0
-  underprediction_weight: 1.5
+  underprediction_weight: 1.0
+  ag_soft_enabled: true
+  ag_soft_weight: 0.2
+  ag_soft_reduction: mean
+  ag_soft_sigma_min: 0.2
+  ag_soft_sigma_max: 5.0
+  ag_soft_direction: undergrading
   temperature: 1.0
   ordinal_margin_scale: 1.0
   normalize_ordinal_distance: false
@@ -54,4 +61,4 @@ train:
   lr_plateau_factor: 0.2
   lr_plateau_patience: 5
   early_stopping_patience: 13
-  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_underprediction_1.5
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_agsoft

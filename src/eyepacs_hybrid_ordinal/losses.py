@@ -176,3 +176,54 @@ def rmse_loss(
         over_weights,
     )
     return torch.sqrt(torch.mean(weights * errors.square()) + eps)
+
+
+def asymmetric_gaussian_soft_targets(
+    targets: torch.Tensor,
+    sigma_left: torch.Tensor,
+    sigma_right: torch.Tensor,
+    num_classes: int,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    if num_classes < 2:
+        raise ValueError("num_classes must be at least 2.")
+    if targets.ndim != 1 or sigma_left.shape != targets.shape or sigma_right.shape != targets.shape:
+        raise ValueError("targets, sigma_left, and sigma_right must have matching one-dimensional shapes.")
+    if torch.any(sigma_left <= 0) or torch.any(sigma_right <= 0):
+        raise ValueError("AG-soft dispersions must be positive.")
+
+    targets_float = targets.float().unsqueeze(1)
+    grades = torch.arange(num_classes, device=targets.device, dtype=torch.float32).unsqueeze(0)
+    offsets = grades - targets_float
+    sigma_mid = 0.5 * (sigma_left + sigma_right)
+    dispersions = torch.where(
+        offsets < 0,
+        sigma_left.unsqueeze(1),
+        torch.where(offsets > 0, sigma_right.unsqueeze(1), sigma_mid.unsqueeze(1)),
+    )
+    target_logits = -offsets.square() / (2.0 * dispersions.square() + eps)
+    return torch.softmax(target_logits, dim=1)
+
+
+def asymmetric_soft_label_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    sigma_left: torch.Tensor,
+    sigma_right: torch.Tensor,
+    reduction: str = "mean",
+) -> torch.Tensor:
+    if logits.ndim != 2:
+        raise ValueError("AG-soft logits must have shape [batch, num_classes].")
+    if reduction not in {"mean", "sum"}:
+        raise ValueError("reduction must be 'mean' or 'sum'.")
+
+    soft_targets = asymmetric_gaussian_soft_targets(
+        targets,
+        sigma_left,
+        sigma_right,
+        num_classes=logits.shape[1],
+    )
+    losses = -(soft_targets * F.log_softmax(logits.float(), dim=1)).sum(dim=1)
+    if reduction == "sum":
+        return losses.sum()
+    return losses.mean()

@@ -94,3 +94,18 @@ contrastive positives may be missing for rare classes.
   dense layers `1280 -> 128`. Their embeddings are concatenated into a
   256-dimensional representation and passed to the RMSE-optimized regression
   head, so all three objectives are optimized through one connected forward path.
+
+## AG-Soft Experiment Branch
+
+The `agsoft` branch keeps the existing PCOL, SCOLw, and regression path and
+adds a five-class classifier plus an asymmetric-Gaussian head on the shared
+projection embedding. The AG head predicts image-specific left/right
+spreads, clamps them to `[0.2, 5.0]`, and constructs a soft target centered on
+the ground-truth grade. `ag_soft_direction: undergrading` enforces
+`sigma_left <= sigma_right`, making probability decay faster toward lower
+grades. The soft cross-entropy is added with `ag_soft_weight: 0.2`.
+
+This is a minimal transfer of AG-soft supervision, not a reproduction of the
+paper's full CAP-WAE, decoder, asymmetric latent prior, MMD, or MAOC losses.
+Validation and outer-test metrics retain regression as the primary output and
+also report AG classifier accuracy/MAE and mean left/right dispersions.

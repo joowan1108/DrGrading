@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import OrderedDict
 from pathlib import Path
 
@@ -86,6 +87,60 @@ class RegressionHead(nn.Module):
         return self.net(features).squeeze(1)
 
 
+class ClassificationHead(nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int, num_classes: int, dropout: float = 0.0) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=dropout),
+            nn.Linear(hidden_dim, num_classes),
+        )
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        return self.net(features)
+
+
+class AsymmetricGaussianHead(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        sigma_min: float,
+        sigma_max: float,
+        direction: str = "undergrading",
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        if not 0 < sigma_min < sigma_max:
+            raise ValueError("AG-soft requires 0 < sigma_min < sigma_max.")
+        if direction not in {"learned", "undergrading", "overgrading"}:
+            raise ValueError("ag_soft_direction must be learned, undergrading, or overgrading.")
+        self.sigma_min = float(sigma_min)
+        self.sigma_max = float(sigma_max)
+        self.direction = direction
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=dropout),
+            nn.Linear(hidden_dim, 2),
+        )
+
+    def forward(self, features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        log_sigmas = self.net(features).clamp(
+            min=math.log(self.sigma_min),
+            max=math.log(self.sigma_max),
+        )
+        sigma_a, sigma_b = log_sigmas.exp().unbind(dim=1)
+        if self.direction == "learned":
+            return sigma_a, sigma_b
+        narrow = torch.minimum(sigma_a, sigma_b)
+        wide = torch.maximum(sigma_a, sigma_b)
+        if self.direction == "undergrading":
+            return narrow, wide
+        return wide, narrow
+
+
 class HybridOrdinalNet(nn.Module):
     """Backbone with PCOL/SCOLw projections and an ordinal regression head."""
 
@@ -98,6 +153,12 @@ class HybridOrdinalNet(nn.Module):
         regression_hidden_dim: int = 1280,
         dropout: float = 0.0,
         regression_input: str = "backbone",
+        num_classes: int = 5,
+        ag_soft_enabled: bool = False,
+        ag_soft_hidden_dim: int = 128,
+        ag_soft_sigma_min: float = 0.2,
+        ag_soft_sigma_max: float = 5.0,
+        ag_soft_direction: str = "undergrading",
     ) -> None:
         super().__init__()
         if regression_input not in {"backbone", "projection_concat"}:
@@ -112,6 +173,19 @@ class HybridOrdinalNet(nn.Module):
         self.scol_head = ProjectionHead(self.feature_dim, projection_hidden_dim, projection_dim, dropout=dropout)
         regression_input_dim = 2 * projection_dim if regression_input == "projection_concat" else self.feature_dim
         self.regression_head = RegressionHead(regression_input_dim, regression_hidden_dim, dropout=dropout)
+        self.ag_soft_enabled = bool(ag_soft_enabled)
+        if self.ag_soft_enabled:
+            self.ag_classifier_head = ClassificationHead(
+                regression_input_dim, ag_soft_hidden_dim, num_classes, dropout=dropout
+            )
+            self.ag_head = AsymmetricGaussianHead(
+                regression_input_dim,
+                ag_soft_hidden_dim,
+                sigma_min=ag_soft_sigma_min,
+                sigma_max=ag_soft_sigma_max,
+                direction=ag_soft_direction,
+                dropout=dropout,
+            )
 
     def forward(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         features = self.encoder(images)
@@ -127,12 +201,22 @@ class HybridOrdinalNet(nn.Module):
             else:
                 regression_features = head_features
 
-            return {
+            outputs = {
                 "features": head_features,
                 "pcol": pcol_embedding,
                 "scol": scol_embedding,
                 "prediction": self.regression_head(regression_features),
             }
+            if self.ag_soft_enabled:
+                sigma_left, sigma_right = self.ag_head(regression_features)
+                outputs.update(
+                    {
+                        "ag_logits": self.ag_classifier_head(regression_features),
+                        "sigma_left": sigma_left,
+                        "sigma_right": sigma_right,
+                    }
+                )
+            return outputs
 
 
 def clean_state_dict_keys(state_dict: dict[str, torch.Tensor]) -> OrderedDict[str, torch.Tensor]:

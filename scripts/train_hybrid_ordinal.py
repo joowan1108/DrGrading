@@ -21,6 +21,7 @@ from eyepacs_hybrid_ordinal.data import (
 from eyepacs_hybrid_ordinal.losses import (
     PrototypeContrastiveOrdinalLoss,
     WeightedSupervisedContrastiveOrdinalLoss,
+    asymmetric_soft_label_loss,
     rmse_loss,
 )
 from eyepacs_hybrid_ordinal.metrics import aggregate_predictions, batch_metrics
@@ -194,12 +195,27 @@ def compute_losses(
         overprediction_weight=float(loss_cfg.get("overprediction_weight", 1.0)),
         underprediction_weight=float(loss_cfg.get("underprediction_weight", 1.0)),
     )
+    if bool(loss_cfg.get("ag_soft_enabled", False)):
+        required = {"ag_logits", "sigma_left", "sigma_right"}
+        missing = required.difference(regression_outputs)
+        if missing:
+            raise KeyError(f"AG-soft is enabled but model outputs are missing: {sorted(missing)}")
+        ag_soft = asymmetric_soft_label_loss(
+            regression_outputs["ag_logits"],
+            regression_targets,
+            regression_outputs["sigma_left"],
+            regression_outputs["sigma_right"],
+            reduction=loss_cfg.get("ag_soft_reduction", "mean"),
+        )
+    else:
+        ag_soft = regression_outputs["prediction"].sum() * 0.0
     total = (
         float(loss_cfg.get("alpha", 1.0)) * pcol
         + float(loss_cfg.get("beta", 1.0)) * scol
         + float(loss_cfg.get("rmse_weight", 1.0)) * rmse
+        + float(loss_cfg.get("ag_soft_weight", 0.0)) * ag_soft
     )
-    return {"total": total, "pcol": pcol, "scol": scol, "rmse": rmse}
+    return {"total": total, "pcol": pcol, "scol": scol, "rmse": rmse, "ag_soft": ag_soft}
 
 
 def assert_finite_losses(losses: dict[str, torch.Tensor], outputs: dict[str, torch.Tensor], targets: torch.Tensor) -> None:
@@ -236,7 +252,7 @@ def train_one_epoch(
     epoch: int,
 ):
     model.train()
-    meters = {name: AverageMeter() for name in ["total", "pcol", "scol", "rmse", "accuracy", "mae"]}
+    meters = {name: AverageMeter() for name in ["total", "pcol", "scol", "rmse", "ag_soft", "accuracy", "mae"]}
     progress = tqdm(contrastive_loader, desc=f"train {epoch}", leave=False)
     shared_batch = regression_loader is contrastive_loader
     regression_iter = None if shared_batch else iter(regression_loader)
@@ -308,6 +324,9 @@ def evaluate(model, loader, device, amp_enabled, cfg, description: str = "val"):
     model.eval()
     predictions: list[float] = []
     targets_all: list[int] = []
+    ag_class_predictions: list[int] = []
+    sigma_left_all: list[float] = []
+    sigma_right_all: list[float] = []
 
     for images, targets, _ in tqdm(loader, desc=description, leave=False):
         images = images.to(device, non_blocking=True)
@@ -317,8 +336,23 @@ def evaluate(model, loader, device, amp_enabled, cfg, description: str = "val"):
 
         predictions.extend(outputs["prediction"].detach().cpu().float().tolist())
         targets_all.extend(targets.detach().cpu().long().tolist())
+        if "ag_logits" in outputs:
+            ag_class_predictions.extend(outputs["ag_logits"].argmax(dim=1).detach().cpu().long().tolist())
+            sigma_left_all.extend(outputs["sigma_left"].detach().cpu().float().tolist())
+            sigma_right_all.extend(outputs["sigma_right"].detach().cpu().float().tolist())
 
     metrics = aggregate_predictions(predictions, targets_all, int(cfg["model"].get("num_classes", 5)))
+    if ag_class_predictions:
+        ag_predictions = torch.tensor(ag_class_predictions, dtype=torch.long)
+        ag_targets = torch.tensor(targets_all, dtype=torch.long)
+        metrics.update(
+            {
+                "ag_classifier_accuracy": float((ag_predictions == ag_targets).float().mean().item()),
+                "ag_classifier_mae": float((ag_predictions - ag_targets).abs().float().mean().item()),
+                "mean_sigma_left": float(sum(sigma_left_all) / len(sigma_left_all)),
+                "mean_sigma_right": float(sum(sigma_right_all) / len(sigma_right_all)),
+            }
+        )
     return metrics
 
 
@@ -339,6 +373,12 @@ def main() -> None:
         regression_hidden_dim=int(cfg["model"].get("regression_hidden_dim", 1280)),
         dropout=float(cfg["model"].get("dropout", 0.2)),
         regression_input=cfg["model"].get("regression_input", "backbone"),
+        num_classes=int(cfg["model"].get("num_classes", 5)),
+        ag_soft_enabled=bool(cfg["loss"].get("ag_soft_enabled", False)),
+        ag_soft_hidden_dim=int(cfg["model"].get("ag_soft_hidden_dim", 128)),
+        ag_soft_sigma_min=float(cfg["loss"].get("ag_soft_sigma_min", 0.2)),
+        ag_soft_sigma_max=float(cfg["loss"].get("ag_soft_sigma_max", 5.0)),
+        ag_soft_direction=cfg["loss"].get("ag_soft_direction", "undergrading"),
     ).to(device)
 
     loss_cfg = cfg["loss"]

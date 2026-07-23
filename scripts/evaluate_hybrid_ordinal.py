@@ -89,6 +89,12 @@ def main() -> None:
         regression_hidden_dim=int(cfg["model"].get("regression_hidden_dim", 1280)),
         dropout=float(cfg["model"].get("dropout", 0.2)),
         regression_input=cfg["model"].get("regression_input", "backbone"),
+        num_classes=num_classes,
+        ag_soft_enabled=bool(cfg["loss"].get("ag_soft_enabled", False)),
+        ag_soft_hidden_dim=int(cfg["model"].get("ag_soft_hidden_dim", 128)),
+        ag_soft_sigma_min=float(cfg["loss"].get("ag_soft_sigma_min", 0.2)),
+        ag_soft_sigma_max=float(cfg["loss"].get("ag_soft_sigma_max", 5.0)),
+        ag_soft_direction=cfg["loss"].get("ag_soft_direction", "undergrading"),
     ).to(device)
     checkpoint = load_model_checkpoint(model, args.checkpoint, strict=True)
     model.eval()
@@ -96,14 +102,32 @@ def main() -> None:
     amp_enabled = bool(cfg["train"].get("amp", True)) and device.type == "cuda"
     predictions: list[float] = []
     targets_all: list[int] = []
+    ag_class_predictions: list[int] = []
+    sigma_left_all: list[float] = []
+    sigma_right_all: list[float] = []
     for images, targets, _ in tqdm(loader, desc="evaluate"):
         images = images.to(device, non_blocking=True)
         with autocast(enabled=amp_enabled):
             outputs = model(images)
         predictions.extend(outputs["prediction"].detach().cpu().float().tolist())
         targets_all.extend(targets.long().tolist())
+        if "ag_logits" in outputs:
+            ag_class_predictions.extend(outputs["ag_logits"].argmax(dim=1).detach().cpu().long().tolist())
+            sigma_left_all.extend(outputs["sigma_left"].detach().cpu().float().tolist())
+            sigma_right_all.extend(outputs["sigma_right"].detach().cpu().float().tolist())
 
     metrics = aggregate_predictions(predictions, targets_all, num_classes)
+    if ag_class_predictions:
+        ag_predictions = torch.tensor(ag_class_predictions, dtype=torch.long)
+        ag_targets = torch.tensor(targets_all, dtype=torch.long)
+        metrics.update(
+            {
+                "ag_classifier_accuracy": float((ag_predictions == ag_targets).float().mean().item()),
+                "ag_classifier_mae": float((ag_predictions - ag_targets).abs().float().mean().item()),
+                "mean_sigma_left": float(sum(sigma_left_all) / len(sigma_left_all)),
+                "mean_sigma_right": float(sum(sigma_right_all) / len(sigma_right_all)),
+            }
+        )
     print(f"checkpoint_epoch={checkpoint.get('epoch', 'unknown')}")
     print(f"accuracy={metrics['accuracy']:.4f}")
     print(f"mae={metrics['mae']:.4f}")
@@ -116,6 +140,11 @@ def main() -> None:
     print(f"overdiagnosis_rate={metrics['overdiagnosis_rate']:.4f}")
     print(f"mean_underdiagnosis_distance={metrics['mean_underdiagnosis_distance']:.4f}")
     print(f"mean_overdiagnosis_distance={metrics['mean_overdiagnosis_distance']:.4f}")
+    if "ag_classifier_accuracy" in metrics:
+        print(f"ag_classifier_accuracy={metrics['ag_classifier_accuracy']:.4f}")
+        print(f"ag_classifier_mae={metrics['ag_classifier_mae']:.4f}")
+        print(f"mean_sigma_left={metrics['mean_sigma_left']:.4f}")
+        print(f"mean_sigma_right={metrics['mean_sigma_right']:.4f}")
     print("per_class=")
     for label, values in metrics["per_class"].items():
         print(f"  {label}: {values}")

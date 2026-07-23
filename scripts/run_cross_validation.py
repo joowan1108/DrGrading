@@ -36,6 +36,12 @@ def main() -> None:
 
     base_output_dir = ensure_dir(cfg["train"]["output_dir"])
     fold_results = []
+    ag_metric_names = [
+        "ag_classifier_accuracy",
+        "ag_classifier_mae",
+        "mean_sigma_left",
+        "mean_sigma_right",
+    ]
 
     for fold_index in range(num_folds):
         fold_cfg = copy.deepcopy(cfg)
@@ -60,24 +66,26 @@ def main() -> None:
         test_metrics = fold_metrics.get("test")
         if not test_metrics:
             raise RuntimeError(f"Fold {fold_index} did not produce outer test metrics.")
-        fold_results.append(
-            {
-                "fold": fold_index,
-                "best_epoch": fold_metrics["best_epoch"],
-                "accuracy": float(test_metrics["accuracy"]),
-                "mae": float(test_metrics["mae"]),
-                "continuous_mae": float(test_metrics["continuous_mae"]),
-                "rmse_loss": float(test_metrics["rmse_loss"]),
-                "correct_rate": float(test_metrics["correct_rate"]),
-                "adjacent_rate": float(test_metrics["adjacent_rate"]),
-                "non_adjacent_rate": float(test_metrics["non_adjacent_rate"]),
-                "underdiagnosis_rate": float(test_metrics["underdiagnosis_rate"]),
-                "overdiagnosis_rate": float(test_metrics["overdiagnosis_rate"]),
-                "mean_underdiagnosis_distance": float(test_metrics["mean_underdiagnosis_distance"]),
-                "mean_overdiagnosis_distance": float(test_metrics["mean_overdiagnosis_distance"]),
-                "per_class": test_metrics["per_class"],
-            }
-        )
+        fold_result = {
+            "fold": fold_index,
+            "best_epoch": fold_metrics["best_epoch"],
+            "accuracy": float(test_metrics["accuracy"]),
+            "mae": float(test_metrics["mae"]),
+            "continuous_mae": float(test_metrics["continuous_mae"]),
+            "rmse_loss": float(test_metrics["rmse_loss"]),
+            "correct_rate": float(test_metrics["correct_rate"]),
+            "adjacent_rate": float(test_metrics["adjacent_rate"]),
+            "non_adjacent_rate": float(test_metrics["non_adjacent_rate"]),
+            "underdiagnosis_rate": float(test_metrics["underdiagnosis_rate"]),
+            "overdiagnosis_rate": float(test_metrics["overdiagnosis_rate"]),
+            "mean_underdiagnosis_distance": float(test_metrics["mean_underdiagnosis_distance"]),
+            "mean_overdiagnosis_distance": float(test_metrics["mean_overdiagnosis_distance"]),
+            "per_class": test_metrics["per_class"],
+        }
+        for metric in ag_metric_names:
+            if metric in test_metrics:
+                fold_result[metric] = float(test_metrics[metric])
+        fold_results.append(fold_result)
 
     per_class = {}
     for label in range(int(cfg["model"].get("num_classes", 5))):
@@ -118,9 +126,13 @@ def main() -> None:
         ),
         "per_class": per_class,
     }
+    for metric in ag_metric_names:
+        if all(metric in item for item in fold_results):
+            aggregate[metric] = mean_std([item[metric] for item in fold_results])
+
     save_json(base_output_dir / "cross_validation_metrics.json", aggregate)
     print("cross-validation summary")
-    for metric in [
+    summary_metrics = [
         "accuracy",
         "mae",
         "continuous_mae",
@@ -131,7 +143,9 @@ def main() -> None:
         "overdiagnosis_rate",
         "mean_underdiagnosis_distance",
         "mean_overdiagnosis_distance",
-    ]:
+    ]
+    summary_metrics.extend(metric for metric in ag_metric_names if metric in aggregate)
+    for metric in summary_metrics:
         values = aggregate[metric]
         print(f"{metric}: {values['mean']:.4f} +/- {values['std']:.4f}")
 
