@@ -192,6 +192,7 @@ def compute_losses(
         regression_outputs["prediction"],
         regression_targets.float(),
         overprediction_weight=float(loss_cfg.get("overprediction_weight", 1.0)),
+        underprediction_weight=float(loss_cfg.get("underprediction_weight", 1.0)),
     )
     total = (
         float(loss_cfg.get("alpha", 1.0)) * pcol

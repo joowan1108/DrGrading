@@ -37,7 +37,8 @@ loss:
   alpha: 1.0
   beta: 1.0
   rmse_weight: 1.0
-  overprediction_weight: 1.5
+  overprediction_weight: 1.0
+  underprediction_weight: 1.5
   temperature: 1.0
   ordinal_margin_scale: 1.0
   normalize_ordinal_distance: false
@@ -53,4 +54,4 @@ train:
   lr_plateau_factor: 0.2
   lr_plateau_patience: 5
   early_stopping_patience: 13
-  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_projection_concat_nested_cv
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_underprediction_1.5
