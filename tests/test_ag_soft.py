@@ -40,13 +40,52 @@ def test_ag_soft_loss_backpropagates_to_logits_and_dispersions() -> None:
     sigma_right = torch.tensor([1.0, 1.2], requires_grad=True)
     targets = torch.tensor([2, 3])
 
-    loss = asymmetric_soft_label_loss(logits, targets, sigma_left, sigma_right)
+    loss = asymmetric_soft_label_loss(
+        logits,
+        targets,
+        sigma_left,
+        sigma_right,
+        soft_target_weight=0.1,
+    )
     loss.backward()
 
     assert torch.isfinite(loss)
     assert logits.grad is not None and torch.isfinite(logits.grad).all()
     assert sigma_left.grad is not None and torch.isfinite(sigma_left.grad).all()
     assert sigma_right.grad is not None and torch.isfinite(sigma_right.grad).all()
+
+
+def test_ag_soft_mix_interpolates_hard_and_soft_cross_entropy() -> None:
+    logits = torch.tensor([[1.5, -0.5, 0.25]], dtype=torch.float32)
+    targets = torch.tensor([1])
+    sigma_left = torch.tensor([0.5])
+    sigma_right = torch.tensor([1.5])
+
+    hard_loss = asymmetric_soft_label_loss(
+        logits,
+        targets,
+        sigma_left,
+        sigma_right,
+        soft_target_weight=0.0,
+    )
+    soft_loss = asymmetric_soft_label_loss(
+        logits,
+        targets,
+        sigma_left,
+        sigma_right,
+        soft_target_weight=1.0,
+    )
+    mixed_loss = asymmetric_soft_label_loss(
+        logits,
+        targets,
+        sigma_left,
+        sigma_right,
+        soft_target_weight=0.25,
+    )
+
+    assert mixed_loss.item() == pytest.approx(
+        0.75 * hard_loss.item() + 0.25 * soft_loss.item()
+    )
 
 
 def test_ag_head_enforces_undergrading_direction_and_bounds() -> None:

@@ -42,10 +42,11 @@ loss:
   underprediction_weight: 1.0
   ag_soft_enabled: true
   ag_soft_weight: 0.2
+  ag_soft_mix: 0.1
   ag_soft_reduction: mean
   ag_soft_sigma_min: 0.2
   ag_soft_sigma_max: 5.0
-  ag_soft_direction: undergrading
+  ag_soft_direction: learned
   temperature: 1.0
   ordinal_margin_scale: 1.0
   normalize_ordinal_distance: false

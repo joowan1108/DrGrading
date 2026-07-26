@@ -210,10 +210,13 @@ def asymmetric_soft_label_loss(
     targets: torch.Tensor,
     sigma_left: torch.Tensor,
     sigma_right: torch.Tensor,
+    soft_target_weight: float = 1.0,
     reduction: str = "mean",
 ) -> torch.Tensor:
     if logits.ndim != 2:
         raise ValueError("AG-soft logits must have shape [batch, num_classes].")
+    if not 0.0 <= soft_target_weight <= 1.0:
+        raise ValueError("soft_target_weight must be in [0, 1].")
     if reduction not in {"mean", "sum"}:
         raise ValueError("reduction must be 'mean' or 'sum'.")
 
@@ -223,7 +226,10 @@ def asymmetric_soft_label_loss(
         sigma_right,
         num_classes=logits.shape[1],
     )
-    losses = -(soft_targets * F.log_softmax(logits.float(), dim=1)).sum(dim=1)
+    logits_float = logits.float()
+    soft_losses = -(soft_targets * F.log_softmax(logits_float, dim=1)).sum(dim=1)
+    hard_losses = F.cross_entropy(logits_float, targets.long(), reduction="none")
+    losses = (1.0 - soft_target_weight) * hard_losses + soft_target_weight * soft_losses
     if reduction == "sum":
         return losses.sum()
     return losses.mean()

@@ -205,6 +205,7 @@ def compute_losses(
             regression_targets,
             regression_outputs["sigma_left"],
             regression_outputs["sigma_right"],
+            soft_target_weight=float(loss_cfg.get("ag_soft_mix", 0.1)),
             reduction=loss_cfg.get("ag_soft_reduction", "mean"),
         )
     else:
