@@ -108,3 +108,9 @@ in `[margin_init_min, margin_init_max]`, and frozen early if it approaches
 `margin_collapse_guard`. This prevents margins from shrinking to zero. The
 per-boundary values are recorded in `metrics.json`, checkpoints, TensorBoard,
 and the cross-validation summary.
+
+Evaluation metrics also separate exact predictions, adjacent errors
+(`|prediction - target| = 1`), and non-adjacent errors. `within_one_class_rate`
+reports exact and adjacent predictions together. These values and their
+per-class breakdowns are written to each fold's `metrics.json` and aggregated
+across folds in `cross_validation_metrics.json`.

@@ -109,6 +109,9 @@ def main() -> None:
     print(f"mae={metrics['mae']:.4f}")
     print(f"continuous_mae={metrics['continuous_mae']:.4f}")
     print(f"rmse={metrics['rmse_loss']:.4f}")
+    print(f"adjacent_rate={metrics['adjacent_rate']:.4f}")
+    print(f"non_adjacent_rate={metrics['non_adjacent_rate']:.4f}")
+    print(f"within_one_class_rate={metrics['within_one_class_rate']:.4f}")
     print("per_class=")
     for label, values in metrics["per_class"].items():
         print(f"  {label}: {values}")

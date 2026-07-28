@@ -27,6 +27,13 @@ def mean_std(values: list[float]) -> dict[str, float]:
     return {"mean": float(array.mean()), "std": float(array.std(ddof=0))}
 
 
+def available_mean_std(values: list[float | None]) -> dict[str, float | None]:
+    available = [float(value) for value in values if value is not None]
+    if not available:
+        return {"mean": None, "std": None}
+    return mean_std(available)
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
@@ -69,9 +76,33 @@ def main() -> None:
                 "mae": float(test_metrics["mae"]),
                 "continuous_mae": float(test_metrics["continuous_mae"]),
                 "rmse_loss": float(test_metrics["rmse_loss"]),
+                "correct_rate": float(test_metrics["correct_rate"]),
+                "adjacent_rate": float(test_metrics["adjacent_rate"]),
+                "non_adjacent_rate": float(test_metrics["non_adjacent_rate"]),
+                "within_one_class_rate": float(test_metrics["within_one_class_rate"]),
+                "per_class": test_metrics["per_class"],
                 "learned_margins": best_margins.get("by_boundary", {}),
             }
         )
+
+    class_metric_names = [
+        "support",
+        "accuracy",
+        "mae",
+        "correct_rate",
+        "adjacent_rate",
+        "non_adjacent_rate",
+        "within_one_class_rate",
+    ]
+    per_class = {}
+    for label in range(int(cfg["model"].get("num_classes", 5))):
+        label_key = str(label)
+        per_class[label_key] = {
+            metric: available_mean_std(
+                [item["per_class"][label_key][metric] for item in fold_results]
+            )
+            for metric in class_metric_names
+        }
 
     aggregate = {
         "folds": fold_results,
@@ -79,6 +110,15 @@ def main() -> None:
         "mae": mean_std([item["mae"] for item in fold_results]),
         "continuous_mae": mean_std([item["continuous_mae"] for item in fold_results]),
         "rmse_loss": mean_std([item["rmse_loss"] for item in fold_results]),
+        "correct_rate": mean_std([item["correct_rate"] for item in fold_results]),
+        "adjacent_rate": mean_std([item["adjacent_rate"] for item in fold_results]),
+        "non_adjacent_rate": mean_std(
+            [item["non_adjacent_rate"] for item in fold_results]
+        ),
+        "within_one_class_rate": mean_std(
+            [item["within_one_class_rate"] for item in fold_results]
+        ),
+        "per_class": per_class,
     }
     boundaries = sorted(
         {
@@ -96,7 +136,15 @@ def main() -> None:
         }
     save_json(base_output_dir / "cross_validation_metrics.json", aggregate)
     print("cross-validation summary")
-    for metric in ["accuracy", "mae", "continuous_mae", "rmse_loss"]:
+    for metric in [
+        "accuracy",
+        "mae",
+        "continuous_mae",
+        "rmse_loss",
+        "adjacent_rate",
+        "non_adjacent_rate",
+        "within_one_class_rate",
+    ]:
         values = aggregate[metric]
         print(f"{metric}: {values['mean']:.4f} +/- {values['std']:.4f}")
     for boundary, values in aggregate.get("learned_margins", {}).items():
