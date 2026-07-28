@@ -5,6 +5,51 @@ from torch import nn
 from torch.nn import functional as F
 
 
+class CumulativeOrdinalMargins(nn.Module):
+    """Learn positive adjacent-class margins and accumulate them across ranks."""
+
+    def __init__(
+        self,
+        num_classes: int,
+        minimum_margin: float = 0.05,
+        init_min: float = 0.5,
+        init_max: float = 1.0,
+    ) -> None:
+        super().__init__()
+        if num_classes < 2:
+            raise ValueError("num_classes must be at least 2.")
+        if minimum_margin < 0:
+            raise ValueError("minimum_margin must be non-negative.")
+        if not minimum_margin < init_min <= init_max:
+            raise ValueError(
+                "Expected minimum_margin < init_min <= init_max for learnable margins."
+            )
+
+        self.num_classes = int(num_classes)
+        self.minimum_margin = float(minimum_margin)
+        initial_margins = torch.empty(self.num_classes - 1).uniform_(init_min, init_max)
+        shifted = initial_margins - self.minimum_margin
+        self.raw_margins = nn.Parameter(torch.log(torch.expm1(shifted)))
+
+    def margin_values(self) -> torch.Tensor:
+        return self.minimum_margin + F.softplus(self.raw_margins)
+
+    def class_positions(self) -> torch.Tensor:
+        zero = self.raw_margins.new_zeros(1)
+        return torch.cat((zero, torch.cumsum(self.margin_values(), dim=0)))
+
+    def forward(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+        left = left.long()
+        right = right.long()
+        positions = self.class_positions()
+        return torch.abs(
+            positions[left].unsqueeze(-1) - positions[right].unsqueeze(0)
+        )
+
+    def freeze(self) -> None:
+        self.raw_margins.requires_grad_(False)
+
+
 def ordinal_distance(
     left: torch.Tensor,
     right: torch.Tensor,
@@ -38,7 +83,12 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
         self.normalize_ordinal_distance = bool(normalize_ordinal_distance)
         self.reduction = reduction
 
-    def forward(self, embeddings: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        embeddings: torch.Tensor,
+        labels: torch.Tensor,
+        learnable_margins: CumulativeOrdinalMargins | None = None,
+    ) -> torch.Tensor:
         embeddings = embeddings.float()
         embeddings = F.normalize(embeddings, dim=1)
         labels = labels.long()
@@ -56,13 +106,16 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
         similarities = embeddings @ prototypes_tensor.T
         positive_mask = labels.unsqueeze(1) == prototype_labels.unsqueeze(0)
         negative_mask = labels.unsqueeze(1) != prototype_labels.unsqueeze(0)
-        distances = ordinal_distance(
-            labels,
-            prototype_labels,
-            num_classes=self.num_classes,
-            normalize=self.normalize_ordinal_distance,
-            margin_scale=self.margin_scale,
-        )
+        if learnable_margins is None:
+            distances = ordinal_distance(
+                labels,
+                prototype_labels,
+                num_classes=self.num_classes,
+                normalize=self.normalize_ordinal_distance,
+                margin_scale=self.margin_scale,
+            )
+        else:
+            distances = learnable_margins(labels, prototype_labels) * self.margin_scale
 
         positive_logits = similarities[positive_mask] / self.temperature
         negative_logits = (similarities + distances)[negative_mask].view(embeddings.shape[0], -1)
@@ -98,6 +151,7 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         embeddings: torch.Tensor,
         labels: torch.Tensor,
         sample_weights: torch.Tensor | None = None,
+        learnable_margins: CumulativeOrdinalMargins | None = None,
     ) -> torch.Tensor:
         embeddings = embeddings.float()
         embeddings = F.normalize(embeddings, dim=1)
@@ -111,13 +165,16 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         negative_mask = labels.unsqueeze(1) != labels.unsqueeze(0)
         self_mask = torch.eye(batch_size, device=embeddings.device, dtype=torch.bool)
 
-        distances = ordinal_distance(
-            labels,
-            labels,
-            num_classes=self.num_classes,
-            normalize=self.normalize_ordinal_distance,
-            margin_scale=self.margin_scale,
-        )
+        if learnable_margins is None:
+            distances = ordinal_distance(
+                labels,
+                labels,
+                num_classes=self.num_classes,
+                normalize=self.normalize_ordinal_distance,
+                margin_scale=self.margin_scale,
+            )
+        else:
+            distances = learnable_margins(labels, labels) * self.margin_scale
         negative_logits = similarities + negative_mask.float() * distances
 
         if sample_weights is None:

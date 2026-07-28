@@ -60,6 +60,7 @@ def main() -> None:
         test_metrics = fold_metrics.get("test")
         if not test_metrics:
             raise RuntimeError(f"Fold {fold_index} did not produce outer test metrics.")
+        best_margins = fold_metrics.get("best_margins", {})
         fold_results.append(
             {
                 "fold": fold_index,
@@ -68,6 +69,7 @@ def main() -> None:
                 "mae": float(test_metrics["mae"]),
                 "continuous_mae": float(test_metrics["continuous_mae"]),
                 "rmse_loss": float(test_metrics["rmse_loss"]),
+                "learned_margins": best_margins.get("by_boundary", {}),
             }
         )
 
@@ -78,11 +80,27 @@ def main() -> None:
         "continuous_mae": mean_std([item["continuous_mae"] for item in fold_results]),
         "rmse_loss": mean_std([item["rmse_loss"] for item in fold_results]),
     }
+    boundaries = sorted(
+        {
+            boundary
+            for item in fold_results
+            for boundary in item["learned_margins"]
+        }
+    )
+    if boundaries:
+        aggregate["learned_margins"] = {
+            boundary: mean_std(
+                [item["learned_margins"][boundary] for item in fold_results]
+            )
+            for boundary in boundaries
+        }
     save_json(base_output_dir / "cross_validation_metrics.json", aggregate)
     print("cross-validation summary")
     for metric in ["accuracy", "mae", "continuous_mae", "rmse_loss"]:
         values = aggregate[metric]
         print(f"{metric}: {values['mean']:.4f} +/- {values['std']:.4f}")
+    for boundary, values in aggregate.get("learned_margins", {}).items():
+        print(f"margin {boundary}: {values['mean']:.4f} +/- {values['std']:.4f}")
 
 
 if __name__ == "__main__":

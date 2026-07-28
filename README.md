@@ -89,3 +89,22 @@ contrastive positives may be missing for rare classes.
   dense layers `1280 -> 128`. Their embeddings are concatenated into a
   256-dimensional representation and passed to the RMSE-optimized regression
   head, so all three objectives are optimized through one connected forward path.
+
+## Learnable Ordinal Distance
+
+The `learnable_dist` branch replaces the fixed distance `|y_i - y_j|` inside
+both PCOL and SCOLw with shared, learnable adjacent-class margins. For example,
+the distance from class 1 to class 4 is `m_1 + m_2 + m_3`.
+
+This is a CLOC-inspired extension of the hybrid baseline, not a replacement of
+PCOL and SCOLw with CLOC's MMNP objective. Training has two stages:
+
+1. Jointly optimize the network and margins.
+2. Freeze the margins, reset the validation scheduler state, and select the
+   final checkpoint while continuing to optimize the network.
+
+Each margin is parameterized as `margin_min + softplus(raw_margin)`, initialized
+in `[margin_init_min, margin_init_max]`, and frozen early if it approaches
+`margin_collapse_guard`. This prevents margins from shrinking to zero. The
+per-boundary values are recorded in `metrics.json`, checkpoints, TensorBoard,
+and the cross-validation summary.
