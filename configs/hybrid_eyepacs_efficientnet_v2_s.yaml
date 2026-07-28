@@ -41,12 +41,10 @@ loss:
   ordinal_margin_scale: 1.0
   normalize_ordinal_distance: false
   learnable_ordinal_margins: true
-  margin_min: 0.05
-  margin_init_min: 0.5
-  margin_init_max: 1.0
+  margin_min: 0.1
+  margin_lr: 0.0001
   margin_phase1_epochs: 10
   margin_phase1_accuracy_threshold: 0.95
-  margin_collapse_guard: 0.1
   reduction: mean
 
 train:
@@ -59,4 +57,4 @@ train:
   lr_plateau_factor: 0.2
   lr_plateau_patience: 5
   early_stopping_patience: 13
-  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_learnable_dist
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_normalized_margin

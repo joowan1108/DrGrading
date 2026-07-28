@@ -69,24 +69,20 @@ def build_learnable_margins(cfg: dict, device: torch.device):
 
     epochs = int(cfg["train"].get("epochs", 75))
     phase1_epochs = int(loss_cfg.get("margin_phase1_epochs", 10))
-    minimum_margin = float(loss_cfg.get("margin_min", 0.05))
-    init_min = float(loss_cfg.get("margin_init_min", 0.5))
-    collapse_guard = float(loss_cfg.get("margin_collapse_guard", 0.1))
+    minimum_margin = float(loss_cfg.get("margin_min", 0.1))
     accuracy_threshold = float(
         loss_cfg.get("margin_phase1_accuracy_threshold", 0.95)
     )
     if not 1 <= phase1_epochs < epochs:
         raise ValueError("margin_phase1_epochs must be between 1 and train.epochs - 1.")
-    if not minimum_margin < collapse_guard < init_min:
-        raise ValueError("Expected margin_min < margin_collapse_guard < margin_init_min.")
+    if not 0.0 <= minimum_margin < 1.0:
+        raise ValueError("margin_min must be in [0, 1).")
     if not 0.0 <= accuracy_threshold <= 1.0:
         raise ValueError("margin_phase1_accuracy_threshold must be in [0, 1].")
 
     return CumulativeOrdinalMargins(
         num_classes=int(cfg["model"].get("num_classes", 5)),
         minimum_margin=minimum_margin,
-        init_min=init_min,
-        init_max=float(loss_cfg.get("margin_init_max", 1.0)),
     ).to(device)
 
 
@@ -108,6 +104,9 @@ def margin_snapshot(
         "by_boundary": {
             f"{index}-{index + 1}": value for index, value in enumerate(values)
         },
+        "parameterization": "fixed_sum_softmax",
+        "sum": sum(values),
+        "mean": sum(values) / len(values),
         "minimum": min(values),
         "maximum": max(values),
     }
@@ -430,10 +429,21 @@ def main() -> None:
     }
 
     learnable_margins = build_learnable_margins(cfg, device)
-    optimization_parameters = list(model.parameters())
+    model_parameters = list(model.parameters())
+    optimization_parameters = list(model_parameters)
+    optimizer = build_optimizer(model_parameters, cfg)
+    optimizer.param_groups[0]["name"] = "model"
     if learnable_margins is not None:
-        optimization_parameters.extend(learnable_margins.parameters())
-    optimizer = build_optimizer(optimization_parameters, cfg)
+        margin_parameters = list(learnable_margins.parameters())
+        optimization_parameters.extend(margin_parameters)
+        optimizer.add_param_group(
+            {
+                "params": margin_parameters,
+                "lr": float(loss_cfg.get("margin_lr", 1e-4)),
+                "weight_decay": 0.0,
+                "name": "ordinal_margins",
+            }
+        )
     scheduler = build_scheduler(optimizer, cfg)
 
     amp_enabled = bool(cfg["train"].get("amp", True)) and device.type == "cuda"
@@ -499,6 +509,13 @@ def main() -> None:
             if learnable_margins is not None:
                 for boundary, value in current_margin_state["by_boundary"].items():
                     writer.add_scalar(f"margins/{boundary}", value, epoch)
+                writer.add_scalar("margins/sum", current_margin_state["sum"], epoch)
+                margin_group = next(
+                    group
+                    for group in optimizer.param_groups
+                    if group.get("name") == "ordinal_margins"
+                )
+                writer.add_scalar("margins/lr", margin_group["lr"], epoch)
                 writer.add_scalar(
                     "margins/phase",
                     1 if phase == "phase1_joint" else 2,
@@ -549,7 +566,7 @@ def main() -> None:
         if learnable_margins is not None:
             margin_text = " margins=[" + ", ".join(
                 f"{value:.3f}" for value in current_margin_state["values"]
-            ) + f"] phase={phase}"
+            ) + f"] margin_sum={current_margin_state['sum']:.3f} phase={phase}"
         print(
             f"epoch {epoch:03d}: "
             f"train_loss={train_metrics['total']:.4f} "
@@ -563,17 +580,11 @@ def main() -> None:
 
         if learnable_margins is not None and phase == "phase1_joint":
             loss_cfg = cfg["loss"]
-            collapse_guard = float(loss_cfg.get("margin_collapse_guard", 0.1))
             accuracy_threshold = float(
                 loss_cfg.get("margin_phase1_accuracy_threshold", 0.95)
             )
             phase1_epochs = int(loss_cfg.get("margin_phase1_epochs", 10))
-            if current_margin_state["minimum"] <= collapse_guard:
-                margin_freeze_reason = (
-                    f"collapse_guard(min={current_margin_state['minimum']:.6f}, "
-                    f"guard={collapse_guard:.6f})"
-                )
-            elif float(train_metrics["accuracy"]) >= accuracy_threshold:
+            if float(train_metrics["accuracy"]) >= accuracy_threshold:
                 margin_freeze_reason = (
                     f"train_accuracy({train_metrics['accuracy']:.6f}>="
                     f"{accuracy_threshold:.6f})"
@@ -592,7 +603,10 @@ def main() -> None:
                 best_epoch = 0
                 initial_lr = float(cfg["train"].get("lr", 1e-3))
                 for parameter_group in optimizer.param_groups:
-                    parameter_group["lr"] = initial_lr
+                    if parameter_group.get("name") == "ordinal_margins":
+                        parameter_group["lr"] = float(loss_cfg.get("margin_lr", 1e-4))
+                    else:
+                        parameter_group["lr"] = initial_lr
                 scheduler = build_scheduler(optimizer, cfg)
                 print(
                     "freezing learned margins and starting phase 2: "

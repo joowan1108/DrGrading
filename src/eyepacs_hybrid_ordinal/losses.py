@@ -6,33 +6,28 @@ from torch.nn import functional as F
 
 
 class CumulativeOrdinalMargins(nn.Module):
-    """Learn positive adjacent-class margins and accumulate them across ranks."""
+    """Learn fixed-sum adjacent margins and accumulate them across ranks."""
 
     def __init__(
         self,
         num_classes: int,
-        minimum_margin: float = 0.05,
-        init_min: float = 0.5,
-        init_max: float = 1.0,
+        minimum_margin: float = 0.1,
     ) -> None:
         super().__init__()
         if num_classes < 2:
             raise ValueError("num_classes must be at least 2.")
-        if minimum_margin < 0:
-            raise ValueError("minimum_margin must be non-negative.")
-        if not minimum_margin < init_min <= init_max:
-            raise ValueError(
-                "Expected minimum_margin < init_min <= init_max for learnable margins."
-            )
+        if not 0 <= minimum_margin < 1:
+            raise ValueError("minimum_margin must be in [0, 1).")
 
         self.num_classes = int(num_classes)
         self.minimum_margin = float(minimum_margin)
-        initial_margins = torch.empty(self.num_classes - 1).uniform_(init_min, init_max)
-        shifted = initial_margins - self.minimum_margin
-        self.raw_margins = nn.Parameter(torch.log(torch.expm1(shifted)))
+        self.raw_margins = nn.Parameter(torch.zeros(self.num_classes - 1))
 
     def margin_values(self) -> torch.Tensor:
-        return self.minimum_margin + F.softplus(self.raw_margins)
+        num_margins = self.num_classes - 1
+        relative_weights = F.softmax(self.raw_margins, dim=0)
+        allocatable_margin = num_margins * (1.0 - self.minimum_margin)
+        return self.minimum_margin + allocatable_margin * relative_weights
 
     def class_positions(self) -> torch.Tensor:
         zero = self.raw_margins.new_zeros(1)
