@@ -6,28 +6,27 @@ from torch.nn import functional as F
 
 
 class CumulativeOrdinalMargins(nn.Module):
-    """Learn fixed-sum adjacent margins and accumulate them across ranks."""
+    """Learn independent bounded adjacent margins and accumulate them across ranks."""
 
     def __init__(
         self,
         num_classes: int,
-        minimum_margin: float = 0.1,
+        initial_margin: float = 0.5,
     ) -> None:
         super().__init__()
         if num_classes < 2:
             raise ValueError("num_classes must be at least 2.")
-        if not 0 <= minimum_margin < 1:
-            raise ValueError("minimum_margin must be in [0, 1).")
+        if not 0 < initial_margin < 1:
+            raise ValueError("initial_margin must be in (0, 1).")
 
         self.num_classes = int(num_classes)
-        self.minimum_margin = float(minimum_margin)
-        self.raw_margins = nn.Parameter(torch.zeros(self.num_classes - 1))
+        initial_logit = torch.logit(torch.tensor(float(initial_margin)))
+        self.raw_margins = nn.Parameter(
+            torch.full((self.num_classes - 1,), initial_logit.item())
+        )
 
     def margin_values(self) -> torch.Tensor:
-        num_margins = self.num_classes - 1
-        relative_weights = F.softmax(self.raw_margins, dim=0)
-        allocatable_margin = num_margins * (1.0 - self.minimum_margin)
-        return self.minimum_margin + allocatable_margin * relative_weights
+        return torch.sigmoid(self.raw_margins)
 
     def class_positions(self) -> torch.Tensor:
         zero = self.raw_margins.new_zeros(1)

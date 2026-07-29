@@ -68,21 +68,28 @@ def build_learnable_margins(cfg: dict, device: torch.device):
         )
 
     epochs = int(cfg["train"].get("epochs", 75))
-    phase1_epochs = int(loss_cfg.get("margin_phase1_epochs", 10))
-    minimum_margin = float(loss_cfg.get("margin_min", 0.1))
-    accuracy_threshold = float(
-        loss_cfg.get("margin_phase1_accuracy_threshold", 0.95)
+    phase1_min_epochs = int(loss_cfg.get("margin_phase1_min_epochs", 20))
+    phase1_max_epochs = int(loss_cfg.get("margin_phase1_max_epochs", 30))
+    convergence_tolerance = float(
+        loss_cfg.get("margin_convergence_tolerance", 1e-3)
     )
-    if not 1 <= phase1_epochs < epochs:
-        raise ValueError("margin_phase1_epochs must be between 1 and train.epochs - 1.")
-    if not 0.0 <= minimum_margin < 1.0:
-        raise ValueError("margin_min must be in [0, 1).")
-    if not 0.0 <= accuracy_threshold <= 1.0:
-        raise ValueError("margin_phase1_accuracy_threshold must be in [0, 1].")
+    convergence_patience = int(loss_cfg.get("margin_convergence_patience", 3))
+    initial_margin = float(loss_cfg.get("margin_init", 0.5))
+    if not 1 <= phase1_min_epochs <= phase1_max_epochs < epochs:
+        raise ValueError(
+            "margin phase 1 epochs must satisfy "
+            "1 <= margin_phase1_min_epochs <= margin_phase1_max_epochs < train.epochs."
+        )
+    if convergence_tolerance <= 0:
+        raise ValueError("margin_convergence_tolerance must be positive.")
+    if convergence_patience < 1:
+        raise ValueError("margin_convergence_patience must be at least 1.")
+    if not 0.0 < initial_margin < 1.0:
+        raise ValueError("margin_init must be in (0, 1).")
 
     return CumulativeOrdinalMargins(
         num_classes=int(cfg["model"].get("num_classes", 5)),
-        minimum_margin=minimum_margin,
+        initial_margin=initial_margin,
     ).to(device)
 
 
@@ -90,6 +97,8 @@ def margin_snapshot(
     learnable_margins: CumulativeOrdinalMargins | None,
     phase: str,
     freeze_reason: str | None,
+    max_change: float | None = None,
+    stable_epochs: int = 0,
 ) -> dict:
     if learnable_margins is None:
         return {"enabled": False, "phase": "fixed"}
@@ -104,11 +113,13 @@ def margin_snapshot(
         "by_boundary": {
             f"{index}-{index + 1}": value for index, value in enumerate(values)
         },
-        "parameterization": "fixed_sum_softmax",
+        "parameterization": "independent_sigmoid",
         "sum": sum(values),
         "mean": sum(values) / len(values),
         "minimum": min(values),
         "maximum": max(values),
+        "max_change": max_change,
+        "stable_epochs": stable_epochs,
     }
 
 
@@ -464,6 +475,9 @@ def main() -> None:
     epochs = int(cfg["train"].get("epochs", 75))
     phase = "phase1_joint" if learnable_margins is not None else "fixed"
     margin_freeze_reason = None
+    previous_margin_values = None
+    margin_max_change = None
+    margin_stable_epochs = 0
     final_epoch = 0
     train_metrics = {}
     val_metrics = {}
@@ -497,7 +511,30 @@ def main() -> None:
             learnable_margins,
             phase,
             margin_freeze_reason,
+            margin_max_change,
+            margin_stable_epochs,
         )
+        if learnable_margins is not None and phase == "phase1_joint":
+            current_margin_values = torch.tensor(current_margin_state["values"])
+            if previous_margin_values is not None:
+                margin_max_change = float(
+                    torch.max(torch.abs(current_margin_values - previous_margin_values))
+                )
+                tolerance = float(
+                    cfg["loss"].get("margin_convergence_tolerance", 1e-3)
+                )
+                if margin_max_change <= tolerance:
+                    margin_stable_epochs += 1
+                else:
+                    margin_stable_epochs = 0
+            previous_margin_values = current_margin_values
+            current_margin_state = margin_snapshot(
+                learnable_margins,
+                phase,
+                margin_freeze_reason,
+                margin_max_change,
+                margin_stable_epochs,
+            )
 
         if writer is not None:
             for key, value in train_metrics.items():
@@ -510,6 +547,17 @@ def main() -> None:
                 for boundary, value in current_margin_state["by_boundary"].items():
                     writer.add_scalar(f"margins/{boundary}", value, epoch)
                 writer.add_scalar("margins/sum", current_margin_state["sum"], epoch)
+                if margin_max_change is not None:
+                    writer.add_scalar(
+                        "margins/max_change",
+                        margin_max_change,
+                        epoch,
+                    )
+                writer.add_scalar(
+                    "margins/stable_epochs",
+                    margin_stable_epochs,
+                    epoch,
+                )
                 margin_group = next(
                     group
                     for group in optimizer.param_groups
@@ -567,6 +615,11 @@ def main() -> None:
             margin_text = " margins=[" + ", ".join(
                 f"{value:.3f}" for value in current_margin_state["values"]
             ) + f"] margin_sum={current_margin_state['sum']:.3f} phase={phase}"
+            if margin_max_change is not None:
+                margin_text += (
+                    f" margin_max_change={margin_max_change:.6f}"
+                    f" stable_epochs={margin_stable_epochs}"
+                )
         print(
             f"epoch {epoch:03d}: "
             f"train_loss={train_metrics['total']:.4f} "
@@ -580,22 +633,40 @@ def main() -> None:
 
         if learnable_margins is not None and phase == "phase1_joint":
             loss_cfg = cfg["loss"]
-            accuracy_threshold = float(
-                loss_cfg.get("margin_phase1_accuracy_threshold", 0.95)
+            phase1_min_epochs = int(
+                loss_cfg.get("margin_phase1_min_epochs", 20)
             )
-            phase1_epochs = int(loss_cfg.get("margin_phase1_epochs", 10))
-            if float(train_metrics["accuracy"]) >= accuracy_threshold:
+            phase1_max_epochs = int(
+                loss_cfg.get("margin_phase1_max_epochs", 30)
+            )
+            convergence_patience = int(
+                loss_cfg.get("margin_convergence_patience", 3)
+            )
+            if (
+                epoch >= phase1_min_epochs
+                and margin_stable_epochs >= convergence_patience
+            ):
                 margin_freeze_reason = (
-                    f"train_accuracy({train_metrics['accuracy']:.6f}>="
-                    f"{accuracy_threshold:.6f})"
+                    f"margin_converged(max_change={margin_max_change:.6g},"
+                    f"stable_epochs={margin_stable_epochs})"
                 )
-            elif epoch >= phase1_epochs:
-                margin_freeze_reason = f"max_phase1_epochs({phase1_epochs})"
+            elif epoch >= phase1_max_epochs:
+                margin_freeze_reason = (
+                    f"max_phase1_epochs({phase1_max_epochs},"
+                    f"last_max_change={margin_max_change:.6g})"
+                )
 
             if margin_freeze_reason is not None:
                 save_checkpoint(output_dir / "phase1_last.pt", payload)
                 learnable_margins.freeze()
                 phase = "phase2_frozen"
+                current_margin_state = margin_snapshot(
+                    learnable_margins,
+                    phase,
+                    margin_freeze_reason,
+                    margin_max_change,
+                    margin_stable_epochs,
+                )
                 bad_epochs = 0
                 best_val_loss = float("inf")
                 best_val_metrics = {}
@@ -648,6 +719,8 @@ def main() -> None:
                 learnable_margins,
                 phase,
                 margin_freeze_reason,
+                margin_max_change,
+                margin_stable_epochs,
             ),
         },
     )

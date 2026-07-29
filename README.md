@@ -103,13 +103,14 @@ PCOL and SCOLw with CLOC's MMNP objective. Training has two stages:
 2. Freeze the margins, reset the validation scheduler state, and select the
    final checkpoint while continuing to optimize the network.
 
-The margins are relative weights parameterized by a softmax with a configurable
-per-boundary floor. They initialize to one, and their sum is always `C - 1`.
-Consequently, training can redistribute ordinal distance between boundaries but
-cannot shrink the complete ordinal scale. Margin parameters use a smaller
-learning rate with no weight decay during phase one. Per-boundary values and
-their fixed sum are recorded in `metrics.json`, checkpoints, TensorBoard, and
-the cross-validation summary.
+Each adjacent margin is independently parameterized by a sigmoid, initialized
+to `0.5`, and constrained to `(0, 1)` without a fixed-sum constraint. Phase one
+runs for at least 20 epochs and freezes the margins once their largest
+epoch-to-epoch change stays below the configured tolerance for several epochs.
+It falls back to freezing at 30 epochs. Margin parameters use a smaller learning
+rate with no weight decay during phase one. Per-boundary values, their observed
+sum, convergence change, and freeze state are recorded in `metrics.json`,
+checkpoints, TensorBoard, and the cross-validation summary.
 
 Evaluation metrics also separate exact predictions, adjacent errors
 (`|prediction - target| = 1`), and non-adjacent errors. `within_one_class_rate`

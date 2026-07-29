@@ -18,45 +18,40 @@ from eyepacs_hybrid_ordinal.losses import (
 
 def set_margin_values(module: CumulativeOrdinalMargins, values: list[float]) -> None:
     target = torch.tensor(values, dtype=module.raw_margins.dtype)
-    num_margins = module.num_classes - 1
-    probabilities = (target - module.minimum_margin) / (
-        num_margins * (1.0 - module.minimum_margin)
-    )
-    torch.testing.assert_close(target.sum(), torch.tensor(float(num_margins)))
-    assert torch.all(probabilities > 0)
+    assert torch.all((target > 0) & (target < 1))
     with torch.no_grad():
-        module.raw_margins.copy_(torch.log(probabilities))
+        module.raw_margins.copy_(torch.logit(target))
 
 
-def test_margins_initialize_to_unit_ordinal_steps() -> None:
-    margins = CumulativeOrdinalMargins(num_classes=5, minimum_margin=0.1)
+def test_margins_initialize_to_configured_value() -> None:
+    margins = CumulativeOrdinalMargins(num_classes=5, initial_margin=0.5)
 
-    torch.testing.assert_close(margins.margin_values(), torch.ones(4))
+    torch.testing.assert_close(margins.margin_values(), torch.full((4,), 0.5))
 
 
-def test_margins_keep_fixed_sum_and_positive_lower_bound() -> None:
-    margins = CumulativeOrdinalMargins(num_classes=5, minimum_margin=0.1)
+def test_margins_are_independently_bounded_without_fixed_sum() -> None:
+    margins = CumulativeOrdinalMargins(num_classes=4, initial_margin=0.5)
 
     with torch.no_grad():
-        margins.raw_margins.copy_(torch.tensor([-100.0, 0.0, 1.0, 2.0]))
+        margins.raw_margins.copy_(torch.tensor([-10.0, 0.0, 2.0]))
 
     values = margins.margin_values()
-    assert torch.all(values >= 0.1)
-    torch.testing.assert_close(values.sum(), torch.tensor(4.0))
+    assert torch.all((values > 0.0) & (values < 1.0))
+    assert not torch.isclose(values.sum(), torch.tensor(3.0))
 
 
 def test_distance_accumulates_adjacent_margins() -> None:
-    margins = CumulativeOrdinalMargins(num_classes=4, minimum_margin=0.1)
-    set_margin_values(margins, [0.5, 1.0, 1.5])
+    margins = CumulativeOrdinalMargins(num_classes=4, initial_margin=0.5)
+    set_margin_values(margins, [0.2, 0.4, 0.8])
 
     labels = torch.tensor([0, 1, 2, 3])
     distances = margins(labels, labels)
     expected = torch.tensor(
         [
-            [0.0, 0.5, 1.5, 3.0],
-            [0.5, 0.0, 1.0, 2.5],
-            [1.5, 1.0, 0.0, 1.5],
-            [3.0, 2.5, 1.5, 0.0],
+            [0.0, 0.2, 0.6, 1.4],
+            [0.2, 0.0, 0.4, 1.2],
+            [0.6, 0.4, 0.0, 0.8],
+            [1.4, 1.2, 0.8, 0.0],
         ]
     )
 

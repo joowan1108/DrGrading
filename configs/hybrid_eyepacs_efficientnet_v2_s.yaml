@@ -9,6 +9,7 @@ data:
   subject_col: null
   image_size: 300
   normalize: none
+  normalize: none
   batch_size: 24
   num_workers: 4
   max_samples: null
@@ -41,10 +42,12 @@ loss:
   ordinal_margin_scale: 1.0
   normalize_ordinal_distance: false
   learnable_ordinal_margins: true
-  margin_min: 0.1
+  margin_init: 0.5
   margin_lr: 0.0001
-  margin_phase1_epochs: 10
-  margin_phase1_accuracy_threshold: 0.95
+  margin_phase1_min_epochs: 20
+  margin_phase1_max_epochs: 30
+  margin_convergence_tolerance: 0.001
+  margin_convergence_patience: 3
   reduction: mean
 
 train:
@@ -57,4 +60,4 @@ train:
   lr_plateau_factor: 0.2
   lr_plateau_patience: 5
   early_stopping_patience: 13
-  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_normalized_margin
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_independent_margin
