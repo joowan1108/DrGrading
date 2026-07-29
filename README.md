@@ -93,27 +93,38 @@ contrastive positives may be missing for rare classes.
 ## Learnable Ordinal Distance
 
 The `learnable_dist` branch replaces the fixed distance `|y_i - y_j|` inside
-both PCOL and SCOLw with shared, learnable adjacent-class margins. For example,
-the distance from class 1 to class 4 is `m_1 + m_2 + m_3`.
+both PCOL and SCOLw with shared adjacent-class margins. For example, the
+distance from class 1 to class 4 is `m_1 + m_2 + m_3`. PCOL and SCOLw consume
+detached margin values, while a separate MMNP objective is solely responsible
+for updating the margins.
 
 This is a CLOC-inspired extension of the hybrid baseline, not a replacement of
 PCOL and SCOLw with CLOC's MMNP objective. Training has two stages:
 
-1. Jointly optimize the network and margins.
+1. Jointly optimize the network and margins with baseline PCOL/SCOLw/RMSE plus
+   a separate MMNP term.
 2. Freeze the margins, reset the validation scheduler state, and select the
    final checkpoint while continuing to optimize the network.
 
 Each adjacent margin is independently parameterized by a sigmoid, initialized
-to `0.5`, and constrained to `(0, 1)` without a fixed-sum constraint. Phase one
-runs for at least 20 epochs and freezes the margins once their largest
-epoch-to-epoch change stays below the configured tolerance for several epochs.
-It falls back to freezing at 30 epochs. Margin parameters use a smaller learning
-rate with no weight decay during phase one. Per-boundary values, their observed
-sum, convergence change, and freeze state are recorded in `metrics.json`,
-checkpoints, TensorBoard, and the cross-validation summary.
+around `0.2` with reproducible independent jitter, and constrained to
+`(0.05, 1)` without a fixed-sum constraint. The asymmetric initialization,
+positive floor, and smaller margin learning rate reduce complete margin
+collapse. Phase one runs for at least 20 epochs and freezes the margins once
+their largest epoch-to-epoch change stays below the configured tolerance for
+several epochs. It falls back to freezing at 30 epochs. Per-boundary values,
+their observed sum, convergence change, and freeze state are recorded in
+`metrics.json`, checkpoints, TensorBoard, and the cross-validation summary.
 
 Evaluation metrics also separate exact predictions, adjacent errors
 (`|prediction - target| = 1`), and non-adjacent errors. `within_one_class_rate`
 reports exact and adjacent predictions together. These values and their
 per-class breakdowns are written to each fold's `metrics.json` and aggregated
 across folds in `cross_validation_metrics.json`.
+
+The separate MMNP term uses the SCOL embedding and applies a CLOC-style hinge
+over every positive-negative pair for each anchor. PCOL and SCOLw keep their
+baseline log-sum-exp forms and use detached cumulative margins. Global and
+per-boundary MMNP active violation rates, comparison counts, and mean hinge
+losses are recorded during training. MMNP uses raw cosine similarities, so
+`loss.temperature` affects PCOL and SCOLw but not MMNP.

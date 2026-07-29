@@ -58,7 +58,7 @@ def test_distance_accumulates_adjacent_margins() -> None:
     torch.testing.assert_close(distances, expected)
 
 
-def test_both_losses_update_the_shared_margins() -> None:
+def test_losses_can_update_shared_margins_when_not_detached() -> None:
     torch.manual_seed(7)
     margins = CumulativeOrdinalMargins(num_classes=3)
     embeddings = torch.randn(6, 8, requires_grad=True)
@@ -81,3 +81,162 @@ def test_freeze_disables_margin_gradients() -> None:
     margins.freeze()
 
     assert not margins.raw_margins.requires_grad
+
+
+def test_mmnp_scol_uses_hinge_and_reports_active_violations() -> None:
+    margins = CumulativeOrdinalMargins(num_classes=2, initial_margin=0.5)
+    embeddings = torch.ones(4, 2, requires_grad=True)
+    labels = torch.tensor([0, 0, 1, 1])
+    scol = WeightedSupervisedContrastiveOrdinalLoss(
+        temperature=1.0,
+        num_classes=2,
+        objective="mmnp",
+    )
+
+    loss = scol(embeddings, labels, learnable_margins=margins)
+    loss.backward()
+
+    torch.testing.assert_close(loss.detach(), torch.tensor(0.5))
+    assert scol.last_active_violation_rate == 1.0
+    assert scol.last_boundary_stats is not None
+    torch.testing.assert_close(
+        scol.last_boundary_stats["comparisons"],
+        torch.tensor([8.0]),
+    )
+    torch.testing.assert_close(
+        scol.last_boundary_stats["active"],
+        torch.tensor([8.0]),
+    )
+    torch.testing.assert_close(
+        scol.last_boundary_stats["loss_sum"],
+        torch.tensor([4.0]),
+    )
+    assert margins.raw_margins.grad is not None
+    assert margins.raw_margins.grad.item() > 0
+
+
+def test_mmnp_scol_ignores_pairs_that_satisfy_the_margin() -> None:
+    margins = CumulativeOrdinalMargins(num_classes=2, initial_margin=0.5)
+    embeddings = torch.tensor(
+        [[1.0, 0.0], [1.0, 0.0], [-1.0, 0.0], [-1.0, 0.0]],
+        requires_grad=True,
+    )
+    labels = torch.tensor([0, 0, 1, 1])
+    scol = WeightedSupervisedContrastiveOrdinalLoss(
+        temperature=1.0,
+        num_classes=2,
+        objective="mmnp",
+    )
+
+    loss = scol(embeddings, labels, learnable_margins=margins)
+
+    torch.testing.assert_close(loss.detach(), torch.tensor(0.0))
+    assert scol.last_active_violation_rate == 0.0
+
+
+def test_pcol_can_use_margins_without_updating_them() -> None:
+    torch.manual_seed(11)
+    margins = CumulativeOrdinalMargins(num_classes=3, initial_margin=0.2)
+    embeddings = torch.randn(6, 8, requires_grad=True)
+    labels = torch.tensor([0, 0, 1, 1, 2, 2])
+    pcol = PrototypeContrastiveOrdinalLoss(temperature=1.0, num_classes=3)
+
+    loss = pcol(
+        embeddings,
+        labels,
+        learnable_margins=margins,
+        detach_learnable_margins=True,
+    )
+    loss.backward()
+
+    assert margins.raw_margins.grad is None
+    assert embeddings.grad is not None
+
+
+def test_mmnp_counts_distant_pairs_at_every_crossed_boundary() -> None:
+    margins = CumulativeOrdinalMargins(num_classes=3, initial_margin=0.2)
+    embeddings = torch.ones(4, 2, requires_grad=True)
+    labels = torch.tensor([0, 0, 2, 2])
+    scol = WeightedSupervisedContrastiveOrdinalLoss(
+        temperature=1.0,
+        num_classes=3,
+        objective="mmnp",
+    )
+
+    loss = scol(embeddings, labels, learnable_margins=margins)
+
+    torch.testing.assert_close(loss.detach(), torch.tensor(0.4))
+    assert scol.last_boundary_stats is not None
+    torch.testing.assert_close(
+        scol.last_boundary_stats["comparisons"],
+        torch.tensor([8.0, 8.0]),
+    )
+    torch.testing.assert_close(
+        scol.last_boundary_stats["active"],
+        torch.tensor([8.0, 8.0]),
+    )
+
+
+def test_scol_can_use_margins_without_updating_them() -> None:
+    torch.manual_seed(13)
+    margins = CumulativeOrdinalMargins(
+        num_classes=3,
+        initial_margin=0.2,
+        minimum_margin=0.05,
+    )
+    embeddings = torch.randn(6, 8, requires_grad=True)
+    labels = torch.tensor([0, 0, 1, 1, 2, 2])
+    scol = WeightedSupervisedContrastiveOrdinalLoss(
+        temperature=1.0,
+        num_classes=3,
+        objective="logsumexp",
+    )
+
+    loss = scol(
+        embeddings,
+        labels,
+        learnable_margins=margins,
+        detach_learnable_margins=True,
+    )
+    loss.backward()
+
+    assert margins.raw_margins.grad is None
+    assert embeddings.grad is not None
+
+
+def test_margin_floor_prevents_complete_collapse() -> None:
+    margins = CumulativeOrdinalMargins(
+        num_classes=3,
+        initial_margin=0.2,
+        minimum_margin=0.05,
+    )
+    with torch.no_grad():
+        margins.raw_margins.fill_(-100.0)
+
+    values = margins.margin_values()
+
+    assert torch.all(values >= 0.05)
+    assert torch.all(values < 1.0)
+
+
+def test_margin_initialization_jitter_breaks_symmetry_reproducibly() -> None:
+    torch.manual_seed(17)
+    first = CumulativeOrdinalMargins(
+        num_classes=5,
+        initial_margin=0.2,
+        minimum_margin=0.05,
+        initial_margin_jitter=0.02,
+    )
+    torch.manual_seed(17)
+    second = CumulativeOrdinalMargins(
+        num_classes=5,
+        initial_margin=0.2,
+        minimum_margin=0.05,
+        initial_margin_jitter=0.02,
+    )
+
+    first_values = first.margin_values()
+    second_values = second.margin_values()
+    torch.testing.assert_close(first_values, second_values)
+    assert torch.all((first_values >= 0.18) & (first_values <= 0.22))
+    assert torch.unique(first_values).numel() > 1

@@ -38,16 +38,23 @@ loss:
   alpha: 1.0
   beta: 1.0
   rmse_weight: 1.0
+  mmnp_weight: 2.0
   temperature: 1.0
   ordinal_margin_scale: 1.0
   normalize_ordinal_distance: false
   learnable_ordinal_margins: true
-  margin_init: 0.5
-  margin_lr: 0.0001
+  margin_init: 0.2
+  margin_init_jitter: 0.02
+  margin_min: 0.05
+  margin_lr: 0.00001
   margin_phase1_min_epochs: 20
   margin_phase1_max_epochs: 30
   margin_convergence_tolerance: 0.001
   margin_convergence_patience: 3
+  scol_objective: logsumexp
+  pcol_updates_learnable_margins: false
+  scol_updates_learnable_margins: false
+  mmnp_reduction: mean
   reduction: mean
 
 train:
@@ -60,4 +67,4 @@ train:
   lr_plateau_factor: 0.2
   lr_plateau_patience: 5
   early_stopping_patience: 13
-  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_independent_margin
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_baseline_plus_mmnp

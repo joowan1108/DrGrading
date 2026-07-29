@@ -75,6 +75,8 @@ def build_learnable_margins(cfg: dict, device: torch.device):
     )
     convergence_patience = int(loss_cfg.get("margin_convergence_patience", 3))
     initial_margin = float(loss_cfg.get("margin_init", 0.5))
+    minimum_margin = float(loss_cfg.get("margin_min", 0.0))
+    initial_margin_jitter = float(loss_cfg.get("margin_init_jitter", 0.0))
     if not 1 <= phase1_min_epochs <= phase1_max_epochs < epochs:
         raise ValueError(
             "margin phase 1 epochs must satisfy "
@@ -84,12 +86,18 @@ def build_learnable_margins(cfg: dict, device: torch.device):
         raise ValueError("margin_convergence_tolerance must be positive.")
     if convergence_patience < 1:
         raise ValueError("margin_convergence_patience must be at least 1.")
-    if not 0.0 < initial_margin < 1.0:
-        raise ValueError("margin_init must be in (0, 1).")
+    if not 0.0 <= minimum_margin < initial_margin < 1.0:
+        raise ValueError(
+            "margins must satisfy 0 <= margin_min < margin_init < 1."
+        )
+    if initial_margin_jitter < 0:
+        raise ValueError("margin_init_jitter must be non-negative.")
 
     return CumulativeOrdinalMargins(
         num_classes=int(cfg["model"].get("num_classes", 5)),
         initial_margin=initial_margin,
+        minimum_margin=minimum_margin,
+        initial_margin_jitter=initial_margin_jitter,
     ).to(device)
 
 
@@ -262,11 +270,23 @@ def compute_losses(
         contrastive_outputs["pcol"],
         contrastive_targets,
         learnable_margins=learnable_margins,
+        detach_learnable_margins=not bool(
+            loss_cfg.get("pcol_updates_learnable_margins", False)
+        ),
     )
     scol = criteria["scol"](
         contrastive_outputs["scol"],
         contrastive_targets,
         sample_weights=contrastive_sample_weights,
+        learnable_margins=learnable_margins,
+        detach_learnable_margins=not bool(
+            loss_cfg.get("scol_updates_learnable_margins", False)
+        ),
+    )
+    mmnp = criteria["mmnp"](
+        contrastive_outputs["scol"],
+        contrastive_targets,
+        sample_weights=None,
         learnable_margins=learnable_margins,
     )
     rmse = rmse_loss(regression_outputs["prediction"], regression_targets.float())
@@ -274,8 +294,15 @@ def compute_losses(
         float(loss_cfg.get("alpha", 1.0)) * pcol
         + float(loss_cfg.get("beta", 1.0)) * scol
         + float(loss_cfg.get("rmse_weight", 1.0)) * rmse
+        + float(loss_cfg.get("mmnp_weight", 1.0)) * mmnp
     )
-    return {"total": total, "pcol": pcol, "scol": scol, "rmse": rmse}
+    return {
+        "total": total,
+        "pcol": pcol,
+        "scol": scol,
+        "mmnp": mmnp,
+        "rmse": rmse,
+    }
 
 
 def assert_finite_losses(losses: dict[str, torch.Tensor], outputs: dict[str, torch.Tensor], targets: torch.Tensor) -> None:
@@ -314,7 +341,18 @@ def train_one_epoch(
     epoch: int,
 ):
     model.train()
-    meters = {name: AverageMeter() for name in ["total", "pcol", "scol", "rmse", "accuracy", "mae"]}
+    meter_names = [
+        "total",
+        "pcol",
+        "scol",
+        "mmnp",
+        "rmse",
+        "accuracy",
+        "mae",
+        "mmnp_active_violation_rate",
+    ]
+    meters = {name: AverageMeter() for name in meter_names}
+    mmnp_boundary_stats = None
     progress = tqdm(contrastive_loader, desc=f"train {epoch}", leave=False)
     shared_batch = regression_loader is contrastive_loader
     regression_iter = None if shared_batch else iter(regression_loader)
@@ -355,6 +393,16 @@ def train_one_epoch(
             learnable_margins,
             cfg,
         )
+        batch_boundary_stats = criteria["mmnp"].last_boundary_stats
+        if batch_boundary_stats is not None:
+            if mmnp_boundary_stats is None:
+                mmnp_boundary_stats = {
+                    name: value.clone()
+                    for name, value in batch_boundary_stats.items()
+                }
+            else:
+                for name, value in batch_boundary_stats.items():
+                    mmnp_boundary_stats[name].add_(value)
         assert_finite_losses(losses, contrastive_outputs, contrastive_targets)
         if not shared_batch:
             assert_finite_losses(losses, regression_outputs, regression_targets)
@@ -375,11 +423,33 @@ def train_one_epoch(
         )
         for name, loss in losses.items():
             meters[name].update(loss.item(), batch_size)
+        if criteria["mmnp"].last_active_violation_rate is not None:
+            meters["mmnp_active_violation_rate"].update(
+                criteria["mmnp"].last_active_violation_rate,
+                criteria["mmnp"].last_num_comparisons,
+            )
         meters["accuracy"].update(metric_values["accuracy"], batch_size)
         meters["mae"].update(metric_values["mae"], batch_size)
         progress.set_postfix(loss=f"{meters['total'].avg:.4f}", acc=f"{meters['accuracy'].avg:.3f}")
 
-    return {name: meter.avg for name, meter in meters.items()}
+    metrics = {name: meter.avg for name, meter in meters.items()}
+    if mmnp_boundary_stats is not None:
+        num_boundaries = int(cfg["model"].get("num_classes", 5)) - 1
+        for boundary in range(num_boundaries):
+            prefix = f"mmnp_boundary_{boundary}-{boundary + 1}"
+            comparisons = float(
+                mmnp_boundary_stats["comparisons"][boundary].cpu().item()
+            )
+            metrics[f"{prefix}_comparisons"] = int(comparisons)
+            metrics[f"{prefix}_active_violation_rate"] = (
+                float(mmnp_boundary_stats["active"][boundary].cpu().item())
+                / max(comparisons, 1.0)
+            )
+            metrics[f"{prefix}_mean_hinge_loss"] = (
+                float(mmnp_boundary_stats["loss_sum"][boundary].cpu().item())
+                / max(comparisons, 1.0)
+            )
+    return metrics
 
 
 @torch.no_grad()
@@ -436,6 +506,15 @@ def main() -> None:
             margin_scale=float(loss_cfg.get("ordinal_margin_scale", 1.0)),
             normalize_ordinal_distance=bool(loss_cfg.get("normalize_ordinal_distance", False)),
             reduction=loss_cfg.get("reduction", "mean"),
+            objective=loss_cfg.get("scol_objective", "logsumexp"),
+        ),
+        "mmnp": WeightedSupervisedContrastiveOrdinalLoss(
+            temperature=1.0,
+            num_classes=num_classes,
+            margin_scale=float(loss_cfg.get("ordinal_margin_scale", 1.0)),
+            normalize_ordinal_distance=bool(loss_cfg.get("normalize_ordinal_distance", False)),
+            reduction=loss_cfg.get("mmnp_reduction", "mean"),
+            objective="mmnp",
         ),
     }
 
@@ -620,6 +699,12 @@ def main() -> None:
                     f" margin_max_change={margin_max_change:.6f}"
                     f" stable_epochs={margin_stable_epochs}"
                 )
+        mmnp_text = ""
+        if "mmnp_active_violation_rate" in train_metrics:
+            mmnp_text = (
+                " mmnp_active="
+                f"{train_metrics['mmnp_active_violation_rate']:.4f}"
+            )
         print(
             f"epoch {epoch:03d}: "
             f"train_loss={train_metrics['total']:.4f} "
@@ -629,6 +714,7 @@ def main() -> None:
             f"val_mae={val_metrics['mae']:.4f} "
             f"lr={optimizer.param_groups[0]['lr']:.2e}"
             f"{margin_text}"
+            f"{mmnp_text}"
         )
 
         if learnable_margins is not None and phase == "phase1_joint":
