@@ -52,14 +52,22 @@ class CumulativeOrdinalMargins(nn.Module):
             (1.0 - self.minimum_margin) * torch.sigmoid(self.raw_margins)
         )
 
-    def class_positions(self) -> torch.Tensor:
+    def class_positions(self, normalize_mean: bool = False) -> torch.Tensor:
+        margins = self.margin_values()
+        if normalize_mean:
+            margins = margins / margins.mean().clamp_min(1e-12)
         zero = self.raw_margins.new_zeros(1)
-        return torch.cat((zero, torch.cumsum(self.margin_values(), dim=0)))
+        return torch.cat((zero, torch.cumsum(margins, dim=0)))
 
-    def forward(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        left: torch.Tensor,
+        right: torch.Tensor,
+        normalize_mean: bool = False,
+    ) -> torch.Tensor:
         left = left.long()
         right = right.long()
-        positions = self.class_positions()
+        positions = self.class_positions(normalize_mean=normalize_mean)
         return torch.abs(
             positions[left].unsqueeze(-1) - positions[right].unsqueeze(0)
         )
@@ -107,6 +115,7 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
         labels: torch.Tensor,
         learnable_margins: CumulativeOrdinalMargins | None = None,
         detach_learnable_margins: bool = False,
+        normalize_learnable_margins: bool = False,
     ) -> torch.Tensor:
         embeddings = embeddings.float()
         embeddings = F.normalize(embeddings, dim=1)
@@ -134,7 +143,11 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
                 margin_scale=self.margin_scale,
             )
         else:
-            distances = learnable_margins(labels, prototype_labels) * self.margin_scale
+            distances = learnable_margins(
+                labels,
+                prototype_labels,
+                normalize_mean=normalize_learnable_margins,
+            ) * self.margin_scale
             if detach_learnable_margins:
                 distances = distances.detach()
 
@@ -181,6 +194,7 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         sample_weights: torch.Tensor | None = None,
         learnable_margins: CumulativeOrdinalMargins | None = None,
         detach_learnable_margins: bool = False,
+        normalize_learnable_margins: bool = False,
     ) -> torch.Tensor:
         embeddings = embeddings.float()
         embeddings = F.normalize(embeddings, dim=1)
@@ -206,7 +220,11 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
                 margin_scale=self.margin_scale,
             )
         else:
-            distances = learnable_margins(labels, labels) * self.margin_scale
+            distances = learnable_margins(
+                labels,
+                labels,
+                normalize_mean=normalize_learnable_margins,
+            ) * self.margin_scale
             if detach_learnable_margins:
                 distances = distances.detach()
         if sample_weights is None:

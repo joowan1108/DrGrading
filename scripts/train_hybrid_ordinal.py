@@ -273,6 +273,9 @@ def compute_losses(
         detach_learnable_margins=not bool(
             loss_cfg.get("pcol_updates_learnable_margins", False)
         ),
+        normalize_learnable_margins=bool(
+            loss_cfg.get("normalize_learnable_margin_mean", True)
+        ),
     )
     scol = criteria["scol"](
         contrastive_outputs["scol"],
@@ -281,6 +284,9 @@ def compute_losses(
         learnable_margins=learnable_margins,
         detach_learnable_margins=not bool(
             loss_cfg.get("scol_updates_learnable_margins", False)
+        ),
+        normalize_learnable_margins=bool(
+            loss_cfg.get("normalize_learnable_margin_mean", True)
         ),
     )
     mmnp = criteria["mmnp"](
@@ -478,6 +484,13 @@ def main() -> None:
 
     device = resolve_device(cfg.get("device", "auto"))
     output_dir = ensure_dir(cfg["train"]["output_dir"])
+    save_json(
+        output_dir / "run_config.json",
+        {
+            "config_path": str(Path(args.config).resolve()),
+            "config": cfg,
+        },
+    )
     contrastive_loader, regression_loader, val_loader, test_loader = make_dataloaders(cfg)
 
     model = HybridOrdinalNet(
@@ -548,6 +561,7 @@ def main() -> None:
 
     best_val_loss = float("inf")
     best_val_metrics = {}
+    best_train_metrics = {}
     best_margin_state = {}
     best_epoch = 0
     bad_epochs = 0
@@ -560,6 +574,7 @@ def main() -> None:
     final_epoch = 0
     train_metrics = {}
     val_metrics = {}
+    metrics_history = []
 
     if learnable_margins is not None:
         initial_margins = margin_snapshot(learnable_margins, phase, margin_freeze_reason)
@@ -668,24 +683,57 @@ def main() -> None:
         if improved:
             best_val_loss = float(val_metrics["rmse_loss"])
             best_val_metrics = val_metrics
+            best_train_metrics = train_metrics
             best_margin_state = current_margin_state
             best_epoch = epoch
             bad_epochs = 0
             save_checkpoint(output_dir / "best.pt", payload)
+            save_json(
+                output_dir / "best_metrics.json",
+                {
+                    "selection_metric": "val.rmse_loss",
+                    "epoch": best_epoch,
+                    "phase": phase,
+                    "val_rmse_loss": best_val_loss,
+                    "train": best_train_metrics,
+                    "val": best_val_metrics,
+                    "margins": best_margin_state,
+                },
+            )
         else:
             bad_epochs += 1
 
+        epoch_record = {
+            "epoch": epoch,
+            "phase": phase,
+            "learning_rate": float(optimizer.param_groups[0]["lr"]),
+            "train": train_metrics,
+            "val": val_metrics,
+            "margins": current_margin_state,
+            "is_best": improved,
+        }
+        metrics_history.append(epoch_record)
+        save_json(
+            output_dir / "metrics_history.json",
+            {
+                "selection_metric": "val.rmse_loss",
+                "epochs": metrics_history,
+            },
+        )
         save_json(
             output_dir / "metrics.json",
             {
                 "epoch": epoch,
                 "best_epoch": best_epoch,
                 "best_val_rmse_loss": best_val_loss,
+                "best_train": best_train_metrics,
                 "best_val": best_val_metrics,
                 "best_margins": best_margin_state,
                 "train": train_metrics,
                 "val": val_metrics,
                 "margins": current_margin_state,
+                "history_file": "metrics_history.json",
+                "run_config_file": "run_config.json",
             },
         )
 
@@ -756,6 +804,7 @@ def main() -> None:
                 bad_epochs = 0
                 best_val_loss = float("inf")
                 best_val_metrics = {}
+                best_train_metrics = {}
                 best_margin_state = {}
                 best_epoch = 0
                 initial_lr = float(cfg["train"].get("lr", 1e-3))
@@ -783,6 +832,15 @@ def main() -> None:
     if test_loader is not None:
         load_model_checkpoint(model, output_dir / "best.pt", strict=True)
         test_metrics = evaluate(model, test_loader, device, amp_enabled, cfg, description="test")
+        save_json(
+            output_dir / "test_metrics.json",
+            {
+                "checkpoint": "best.pt",
+                "best_epoch": best_epoch,
+                "selection_metric": "val.rmse_loss",
+                "test": test_metrics,
+            },
+        )
         print(
             f"outer test (best epoch {best_epoch:03d}): "
             f"rmse={test_metrics['rmse_loss']:.4f} "
@@ -796,11 +854,18 @@ def main() -> None:
             "epoch": final_epoch,
             "best_epoch": best_epoch,
             "best_val_rmse_loss": best_val_loss,
+            "best_train": best_train_metrics,
             "best_val": best_val_metrics,
             "best_margins": best_margin_state,
             "train": train_metrics,
             "val": val_metrics,
             "test": test_metrics,
+            "history_file": "metrics_history.json",
+            "best_metrics_file": "best_metrics.json",
+            "run_config_file": "run_config.json",
+            "test_metrics_file": (
+                "test_metrics.json" if test_metrics is not None else None
+            ),
             "margins": margin_snapshot(
                 learnable_margins,
                 phase,

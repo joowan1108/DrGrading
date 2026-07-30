@@ -95,8 +95,9 @@ contrastive positives may be missing for rare classes.
 The `learnable_dist` branch replaces the fixed distance `|y_i - y_j|` inside
 both PCOL and SCOLw with shared adjacent-class margins. For example, the
 distance from class 1 to class 4 is `m_1 + m_2 + m_3`. PCOL and SCOLw consume
-detached margin values, while a separate MMNP objective is solely responsible
-for updating the margins.
+detached margin values normalized to an average adjacent step of 1, preserving
+the baseline distance scale from class 0 to class 4. A separate MMNP objective
+uses the raw, unnormalized margins and is solely responsible for updating them.
 
 This is a CLOC-inspired extension of the hybrid baseline, not a replacement of
 PCOL and SCOLw with CLOC's MMNP objective. Training has two stages:
@@ -115,6 +116,10 @@ their largest epoch-to-epoch change stays below the configured tolerance for
 several epochs. It falls back to freezing at 30 epochs. Per-boundary values,
 their observed sum, convergence change, and freeze state are recorded in
 `metrics.json`, checkpoints, TensorBoard, and the cross-validation summary.
+The output directory also contains the resolved `run_config.json`,
+per-epoch `metrics_history.json`, `best_metrics.json`, and (for nested
+cross-validation) `test_metrics.json`. Checkpoints and JSON files are replaced
+atomically so an interrupted write does not destroy the previous complete file.
 
 Evaluation metrics also separate exact predictions, adjacent errors
 (`|prediction - target| = 1`), and non-adjacent errors. `within_one_class_rate`

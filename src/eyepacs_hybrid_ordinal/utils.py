@@ -57,14 +57,20 @@ class AverageMeter:
 def save_checkpoint(path: str | Path, payload: dict[str, Any]) -> None:
     path = Path(path)
     ensure_dir(path.parent)
-    torch.save(payload, path)
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, temporary_path)
+    os.replace(temporary_path, path)
 
 
 def save_json(path: str | Path, payload: dict[str, Any]) -> None:
     path = Path(path)
     ensure_dir(path.parent)
-    with open(path, "w", encoding="utf-8") as handle:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with open(temporary_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary_path, path)
 
 
 def worker_count(num_workers: int) -> int:

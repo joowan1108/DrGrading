@@ -76,6 +76,12 @@ def main() -> None:
                 "mae": float(test_metrics["mae"]),
                 "continuous_mae": float(test_metrics["continuous_mae"]),
                 "rmse_loss": float(test_metrics["rmse_loss"]),
+                "correct_count": int(test_metrics["correct_count"]),
+                "adjacent_count": int(test_metrics["adjacent_count"]),
+                "non_adjacent_count": int(test_metrics["non_adjacent_count"]),
+                "within_one_class_count": int(
+                    test_metrics["within_one_class_count"]
+                ),
                 "correct_rate": float(test_metrics["correct_rate"]),
                 "adjacent_rate": float(test_metrics["adjacent_rate"]),
                 "non_adjacent_rate": float(test_metrics["non_adjacent_rate"]),
@@ -106,6 +112,15 @@ def main() -> None:
 
     aggregate = {
         "folds": fold_results,
+        "total_counts": {
+            metric: sum(int(item[metric]) for item in fold_results)
+            for metric in [
+                "correct_count",
+                "adjacent_count",
+                "non_adjacent_count",
+                "within_one_class_count",
+            ]
+        },
         "accuracy": mean_std([item["accuracy"] for item in fold_results]),
         "mae": mean_std([item["mae"] for item in fold_results]),
         "continuous_mae": mean_std([item["continuous_mae"] for item in fold_results]),

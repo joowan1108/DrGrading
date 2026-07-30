@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from eyepacs_hybrid_ordinal.ordinal_metrics import ordinal_error_distribution
+from eyepacs_hybrid_ordinal.metrics import aggregate_predictions
 
 
 def test_ordinal_error_distribution_separates_error_distances() -> None:
@@ -39,3 +40,19 @@ def test_ordinal_error_distribution_separates_error_distances() -> None:
 def test_ordinal_error_distribution_rejects_empty_inputs() -> None:
     with np.testing.assert_raises(ValueError):
         ordinal_error_distribution(np.asarray([]), np.asarray([]))
+
+
+def test_aggregate_predictions_keeps_global_and_per_class_ordinal_metrics() -> None:
+    result = aggregate_predictions(
+        predictions=[0.0, 2.0, 2.0, 4.0, 2.0],
+        targets=[0, 1, 2, 3, 4],
+        num_classes=5,
+    )
+
+    assert result["correct_count"] == 2
+    assert result["adjacent_count"] == 2
+    assert result["non_adjacent_count"] == 1
+    assert result["within_one_class_count"] == 4
+    assert result["per_class"]["1"]["accuracy"] == 0.0
+    assert result["per_class"]["1"]["adjacent_rate"] == 1.0
+    assert result["per_class"]["4"]["non_adjacent_rate"] == 1.0

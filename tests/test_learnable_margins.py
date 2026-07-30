@@ -58,6 +58,22 @@ def test_distance_accumulates_adjacent_margins() -> None:
     torch.testing.assert_close(distances, expected)
 
 
+def test_mean_normalized_distance_preserves_baseline_total_scale() -> None:
+    margins = CumulativeOrdinalMargins(num_classes=5, initial_margin=0.2)
+    set_margin_values(margins, [0.1, 0.2, 0.3, 0.4])
+
+    labels = torch.tensor([0, 1, 2, 3, 4])
+    raw_distances = margins(labels, labels)
+    normalized_distances = margins(labels, labels, normalize_mean=True)
+
+    torch.testing.assert_close(raw_distances[0, 4], torch.tensor(1.0))
+    torch.testing.assert_close(normalized_distances[0, 4], torch.tensor(4.0))
+    torch.testing.assert_close(
+        normalized_distances[0],
+        torch.tensor([0.0, 0.4, 1.2, 2.4, 4.0]),
+    )
+
+
 def test_losses_can_update_shared_margins_when_not_detached() -> None:
     torch.manual_seed(7)
     margins = CumulativeOrdinalMargins(num_classes=3)

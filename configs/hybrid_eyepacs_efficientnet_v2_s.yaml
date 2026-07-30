@@ -9,7 +9,6 @@ data:
   subject_col: null
   image_size: 300
   normalize: none
-  normalize: none
   batch_size: 24
   num_workers: 4
   max_samples: null
@@ -54,6 +53,7 @@ loss:
   scol_objective: logsumexp
   pcol_updates_learnable_margins: false
   scol_updates_learnable_margins: false
+  normalize_learnable_margin_mean: true
   mmnp_reduction: mean
   reduction: mean
 
@@ -67,4 +67,4 @@ train:
   lr_plateau_factor: 0.2
   lr_plateau_patience: 5
   early_stopping_patience: 13
-  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_baseline_plus_mmnp
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_scaled_baseline_plus_mmnp
