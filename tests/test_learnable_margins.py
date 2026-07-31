@@ -18,9 +18,14 @@ from eyepacs_hybrid_ordinal.losses import (
 
 def set_margin_values(module: CumulativeOrdinalMargins, values: list[float]) -> None:
     target = torch.tensor(values, dtype=module.raw_margins.dtype)
-    assert torch.all((target > 0) & (target < 1))
+    assert torch.all(target > module.minimum_margin)
     with torch.no_grad():
-        module.raw_margins.copy_(torch.logit(target))
+        offset = target - module.minimum_margin
+        if module.parameterization == "softplus":
+            module.raw_margins.copy_(torch.log(torch.expm1(offset)))
+        else:
+            scaled = offset / (1.0 - module.minimum_margin)
+            module.raw_margins.copy_(torch.logit(scaled))
 
 
 def test_margins_initialize_to_configured_value() -> None:
@@ -29,14 +34,15 @@ def test_margins_initialize_to_configured_value() -> None:
     torch.testing.assert_close(margins.margin_values(), torch.full((4,), 0.5))
 
 
-def test_margins_are_independently_bounded_without_fixed_sum() -> None:
+def test_softplus_margins_are_positive_unbounded_and_without_fixed_sum() -> None:
     margins = CumulativeOrdinalMargins(num_classes=4, initial_margin=0.5)
 
     with torch.no_grad():
         margins.raw_margins.copy_(torch.tensor([-10.0, 0.0, 2.0]))
 
     values = margins.margin_values()
-    assert torch.all((values > 0.0) & (values < 1.0))
+    assert torch.all(values > 0.0)
+    assert values[-1] > 1.0
     assert not torch.isclose(values.sum(), torch.tensor(3.0))
 
 
@@ -58,19 +64,24 @@ def test_distance_accumulates_adjacent_margins() -> None:
     torch.testing.assert_close(distances, expected)
 
 
-def test_mean_normalized_distance_preserves_baseline_total_scale() -> None:
+def test_mean_normalized_squared_distance_matches_hybrid_ordinal_scale() -> None:
     margins = CumulativeOrdinalMargins(num_classes=5, initial_margin=0.2)
     set_margin_values(margins, [0.1, 0.2, 0.3, 0.4])
 
     labels = torch.tensor([0, 1, 2, 3, 4])
     raw_distances = margins(labels, labels)
-    normalized_distances = margins(labels, labels, normalize_mean=True)
+    normalized_distances = margins(
+        labels,
+        labels,
+        normalize_mean=True,
+        squared=True,
+    )
 
     torch.testing.assert_close(raw_distances[0, 4], torch.tensor(1.0))
-    torch.testing.assert_close(normalized_distances[0, 4], torch.tensor(4.0))
+    torch.testing.assert_close(normalized_distances[0, 4], torch.tensor(16.0))
     torch.testing.assert_close(
         normalized_distances[0],
-        torch.tensor([0.0, 0.4, 1.2, 2.4, 4.0]),
+        torch.tensor([0.0, 0.16, 1.44, 5.76, 16.0]),
     )
 
 
@@ -232,7 +243,31 @@ def test_margin_floor_prevents_complete_collapse() -> None:
     values = margins.margin_values()
 
     assert torch.all(values >= 0.05)
-    assert torch.all(values < 1.0)
+
+
+def test_uniform_softplus_initialization_matches_cloc_range() -> None:
+    torch.manual_seed(19)
+    first = CumulativeOrdinalMargins(
+        num_classes=5,
+        initial_margin=0.75,
+        initial_margin_min=0.5,
+        initial_margin_max=1.0,
+        parameterization="softplus",
+    )
+    torch.manual_seed(19)
+    second = CumulativeOrdinalMargins(
+        num_classes=5,
+        initial_margin=0.75,
+        initial_margin_min=0.5,
+        initial_margin_max=1.0,
+        parameterization="softplus",
+    )
+
+    first_values = first.margin_values()
+    torch.testing.assert_close(first_values, second.margin_values())
+    assert torch.all(first_values >= 0.5)
+    assert torch.all(first_values < 1.0)
+    assert torch.unique(first_values).numel() > 1
 
 
 def test_margin_initialization_jitter_breaks_symmetry_reproducibly() -> None:

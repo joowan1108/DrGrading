@@ -74,9 +74,12 @@ def build_learnable_margins(cfg: dict, device: torch.device):
         loss_cfg.get("margin_convergence_tolerance", 1e-3)
     )
     convergence_patience = int(loss_cfg.get("margin_convergence_patience", 3))
-    initial_margin = float(loss_cfg.get("margin_init", 0.5))
+    initial_margin = float(loss_cfg.get("margin_init", 0.75))
     minimum_margin = float(loss_cfg.get("margin_min", 0.0))
     initial_margin_jitter = float(loss_cfg.get("margin_init_jitter", 0.0))
+    initial_margin_min = loss_cfg.get("margin_init_min")
+    initial_margin_max = loss_cfg.get("margin_init_max")
+    parameterization = loss_cfg.get("margin_parameterization", "softplus")
     if not 1 <= phase1_min_epochs <= phase1_max_epochs < epochs:
         raise ValueError(
             "margin phase 1 epochs must satisfy "
@@ -86,18 +89,27 @@ def build_learnable_margins(cfg: dict, device: torch.device):
         raise ValueError("margin_convergence_tolerance must be positive.")
     if convergence_patience < 1:
         raise ValueError("margin_convergence_patience must be at least 1.")
-    if not 0.0 <= minimum_margin < initial_margin < 1.0:
-        raise ValueError(
-            "margins must satisfy 0 <= margin_min < margin_init < 1."
-        )
+    if minimum_margin < 0 or initial_margin <= minimum_margin:
+        raise ValueError("margin_init must be greater than non-negative margin_min.")
     if initial_margin_jitter < 0:
         raise ValueError("margin_init_jitter must be non-negative.")
+    if (initial_margin_min is None) != (initial_margin_max is None):
+        raise ValueError(
+            "margin_init_min and margin_init_max must be configured together."
+        )
 
     return CumulativeOrdinalMargins(
         num_classes=int(cfg["model"].get("num_classes", 5)),
         initial_margin=initial_margin,
         minimum_margin=minimum_margin,
         initial_margin_jitter=initial_margin_jitter,
+        initial_margin_min=(
+            float(initial_margin_min) if initial_margin_min is not None else None
+        ),
+        initial_margin_max=(
+            float(initial_margin_max) if initial_margin_max is not None else None
+        ),
+        parameterization=parameterization,
     ).to(device)
 
 
@@ -112,6 +124,8 @@ def margin_snapshot(
         return {"enabled": False, "phase": "fixed"}
 
     values = learnable_margins.margin_values().detach().cpu().float().tolist()
+    mean_margin = sum(values) / len(values)
+    scaled_values = [value / mean_margin for value in values]
     return {
         "enabled": True,
         "phase": phase,
@@ -121,11 +135,16 @@ def margin_snapshot(
         "by_boundary": {
             f"{index}-{index + 1}": value for index, value in enumerate(values)
         },
-        "parameterization": "independent_sigmoid",
+        "parameterization": f"independent_{learnable_margins.parameterization}",
         "sum": sum(values),
-        "mean": sum(values) / len(values),
+        "mean": mean_margin,
         "minimum": min(values),
         "maximum": max(values),
+        "hybrid_scaled_values": scaled_values,
+        "hybrid_squared_adjacent_distances": [
+            value * value for value in scaled_values
+        ],
+        "hybrid_total_squared_distance": float(len(values) ** 2),
         "max_change": max_change,
         "stable_epochs": stable_epochs,
     }
@@ -511,6 +530,9 @@ def main() -> None:
             num_classes=num_classes,
             margin_scale=float(loss_cfg.get("ordinal_margin_scale", 1.0)),
             normalize_ordinal_distance=bool(loss_cfg.get("normalize_ordinal_distance", False)),
+            square_ordinal_distance=bool(
+                loss_cfg.get("square_ordinal_distance", True)
+            ),
             reduction=loss_cfg.get("reduction", "mean"),
         ),
         "scol": WeightedSupervisedContrastiveOrdinalLoss(
@@ -518,6 +540,9 @@ def main() -> None:
             num_classes=num_classes,
             margin_scale=float(loss_cfg.get("ordinal_margin_scale", 1.0)),
             normalize_ordinal_distance=bool(loss_cfg.get("normalize_ordinal_distance", False)),
+            square_ordinal_distance=bool(
+                loss_cfg.get("square_ordinal_distance", True)
+            ),
             reduction=loss_cfg.get("reduction", "mean"),
             objective=loss_cfg.get("scol_objective", "logsumexp"),
         ),
@@ -526,6 +551,7 @@ def main() -> None:
             num_classes=num_classes,
             margin_scale=float(loss_cfg.get("ordinal_margin_scale", 1.0)),
             normalize_ordinal_distance=bool(loss_cfg.get("normalize_ordinal_distance", False)),
+            square_ordinal_distance=False,
             reduction=loss_cfg.get("mmnp_reduction", "mean"),
             objective="mmnp",
         ),

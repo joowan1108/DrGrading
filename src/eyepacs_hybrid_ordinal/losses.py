@@ -6,7 +6,7 @@ from torch.nn import functional as F
 
 
 class CumulativeOrdinalMargins(nn.Module):
-    """Learn independent bounded adjacent margins and accumulate them across ranks."""
+    """Learn positive adjacent margins and accumulate them across ranks."""
 
     def __init__(
         self,
@@ -14,40 +14,74 @@ class CumulativeOrdinalMargins(nn.Module):
         initial_margin: float = 0.5,
         minimum_margin: float = 0.0,
         initial_margin_jitter: float = 0.0,
+        initial_margin_min: float | None = None,
+        initial_margin_max: float | None = None,
+        parameterization: str = "softplus",
     ) -> None:
         super().__init__()
         if num_classes < 2:
             raise ValueError("num_classes must be at least 2.")
-        if not 0 <= minimum_margin < initial_margin < 1:
-            raise ValueError(
-                "margins must satisfy 0 <= minimum_margin < initial_margin < 1."
-            )
+        if parameterization not in {"softplus", "sigmoid"}:
+            raise ValueError("parameterization must be 'softplus' or 'sigmoid'.")
+        if minimum_margin < 0:
+            raise ValueError("minimum_margin must be non-negative.")
+        if initial_margin <= minimum_margin:
+            raise ValueError("initial_margin must be greater than minimum_margin.")
+        if parameterization == "sigmoid" and initial_margin >= 1:
+            raise ValueError("sigmoid margins require initial_margin < 1.")
         if initial_margin_jitter < 0:
             raise ValueError("initial_margin_jitter must be non-negative.")
+        if (initial_margin_min is None) != (initial_margin_max is None):
+            raise ValueError(
+                "initial_margin_min and initial_margin_max must be provided together."
+            )
 
         self.num_classes = int(num_classes)
         self.minimum_margin = float(minimum_margin)
-        lower = max(
-            self.minimum_margin + 1e-6,
-            float(initial_margin) - float(initial_margin_jitter),
-        )
-        upper = min(1.0 - 1e-6, float(initial_margin) + float(initial_margin_jitter))
-        if lower >= upper:
-            raise ValueError("initial margin jitter produces an empty interval.")
-        if initial_margin_jitter > 0:
+        self.parameterization = parameterization
+        if initial_margin_min is not None and initial_margin_max is not None:
+            lower = float(initial_margin_min)
+            upper = float(initial_margin_max)
+            if not self.minimum_margin < lower < upper:
+                raise ValueError(
+                    "initial margin range must satisfy "
+                    "minimum_margin < initial_margin_min < initial_margin_max."
+                )
+            if parameterization == "sigmoid" and upper > 1:
+                raise ValueError("sigmoid margin initialization cannot exceed 1.")
             initial_values = torch.empty(self.num_classes - 1).uniform_(lower, upper)
         else:
-            initial_values = torch.full(
-                (self.num_classes - 1,),
-                float(initial_margin),
+            lower = max(
+                self.minimum_margin + 1e-6,
+                float(initial_margin) - float(initial_margin_jitter),
             )
-        scaled_initial_values = (
-            (initial_values - self.minimum_margin)
-            / (1.0 - self.minimum_margin)
-        )
-        self.raw_margins = nn.Parameter(torch.logit(scaled_initial_values))
+            upper = float(initial_margin) + float(initial_margin_jitter)
+            if parameterization == "sigmoid":
+                upper = min(1.0 - 1e-6, upper)
+            if lower >= upper and initial_margin_jitter > 0:
+                raise ValueError("initial margin jitter produces an empty interval.")
+            if initial_margin_jitter > 0:
+                initial_values = torch.empty(self.num_classes - 1).uniform_(
+                    lower,
+                    upper,
+                )
+            else:
+                initial_values = torch.full(
+                    (self.num_classes - 1,),
+                    float(initial_margin),
+                )
+
+        offset = initial_values - self.minimum_margin
+        if self.parameterization == "softplus":
+            raw_initial_values = torch.log(torch.expm1(offset))
+        else:
+            scaled_initial_values = offset / (1.0 - self.minimum_margin)
+            raw_initial_values = torch.logit(scaled_initial_values)
+        self.raw_margins = nn.Parameter(raw_initial_values)
 
     def margin_values(self) -> torch.Tensor:
+        if self.parameterization == "softplus":
+            return self.minimum_margin + F.softplus(self.raw_margins)
         return self.minimum_margin + (
             (1.0 - self.minimum_margin) * torch.sigmoid(self.raw_margins)
         )
@@ -64,13 +98,15 @@ class CumulativeOrdinalMargins(nn.Module):
         left: torch.Tensor,
         right: torch.Tensor,
         normalize_mean: bool = False,
+        squared: bool = False,
     ) -> torch.Tensor:
         left = left.long()
         right = right.long()
         positions = self.class_positions(normalize_mean=normalize_mean)
-        return torch.abs(
+        distances = torch.abs(
             positions[left].unsqueeze(-1) - positions[right].unsqueeze(0)
         )
+        return distances.square() if squared else distances
 
     def freeze(self) -> None:
         self.raw_margins.requires_grad_(False)
@@ -82,10 +118,13 @@ def ordinal_distance(
     num_classes: int,
     normalize: bool = False,
     margin_scale: float = 1.0,
+    squared: bool = False,
 ) -> torch.Tensor:
     distance = torch.abs(left.float().unsqueeze(-1) - right.float().unsqueeze(0))
     if normalize and num_classes > 1:
         distance = distance / float(num_classes - 1)
+    if squared:
+        distance = distance.square()
     return distance * float(margin_scale)
 
 
@@ -96,6 +135,7 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
         num_classes: int = 5,
         margin_scale: float = 1.0,
         normalize_ordinal_distance: bool = False,
+        square_ordinal_distance: bool = False,
         reduction: str = "mean",
     ) -> None:
         super().__init__()
@@ -107,6 +147,7 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
         self.num_classes = int(num_classes)
         self.margin_scale = float(margin_scale)
         self.normalize_ordinal_distance = bool(normalize_ordinal_distance)
+        self.square_ordinal_distance = bool(square_ordinal_distance)
         self.reduction = reduction
 
     def forward(
@@ -141,12 +182,14 @@ class PrototypeContrastiveOrdinalLoss(nn.Module):
                 num_classes=self.num_classes,
                 normalize=self.normalize_ordinal_distance,
                 margin_scale=self.margin_scale,
+                squared=self.square_ordinal_distance,
             )
         else:
             distances = learnable_margins(
                 labels,
                 prototype_labels,
                 normalize_mean=normalize_learnable_margins,
+                squared=self.square_ordinal_distance,
             ) * self.margin_scale
             if detach_learnable_margins:
                 distances = distances.detach()
@@ -167,6 +210,7 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         num_classes: int = 5,
         margin_scale: float = 1.0,
         normalize_ordinal_distance: bool = False,
+        square_ordinal_distance: bool = False,
         reduction: str = "mean",
         objective: str = "logsumexp",
     ) -> None:
@@ -181,6 +225,7 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         self.num_classes = int(num_classes)
         self.margin_scale = float(margin_scale)
         self.normalize_ordinal_distance = bool(normalize_ordinal_distance)
+        self.square_ordinal_distance = bool(square_ordinal_distance)
         self.reduction = reduction
         self.objective = objective
         self.last_active_violation_rate: float | None = None
@@ -218,12 +263,14 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
                 num_classes=self.num_classes,
                 normalize=self.normalize_ordinal_distance,
                 margin_scale=self.margin_scale,
+                squared=self.square_ordinal_distance,
             )
         else:
             distances = learnable_margins(
                 labels,
                 labels,
                 normalize_mean=normalize_learnable_margins,
+                squared=self.square_ordinal_distance,
             ) * self.margin_scale
             if detach_learnable_margins:
                 distances = distances.detach()

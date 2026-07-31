@@ -92,12 +92,15 @@ contrastive positives may be missing for rare classes.
 
 ## Learnable Ordinal Distance
 
-The `learnable_dist` branch replaces the fixed distance `|y_i - y_j|` inside
+The `learnable_dist` branch replaces the fixed distance `|y_i - y_j|^2` inside
 both PCOL and SCOLw with shared adjacent-class margins. For example, the
-distance from class 1 to class 4 is `m_1 + m_2 + m_3`. PCOL and SCOLw consume
-detached margin values normalized to an average adjacent step of 1, preserving
-the baseline distance scale from class 0 to class 4. A separate MMNP objective
-uses the raw, unnormalized margins and is solely responsible for updating them.
+distance from class 1 to class 4 starts from `m_1 + m_2 + m_3`. PCOL and SCOLw
+normalize the detached adjacent margins to an average step of 1 and then square
+the cumulative distance. Their effective distance is therefore
+`(sum(scaled margins))^2`, matching the fixed hybrid ordinal scale
+`|y_i - y_j|^2`; in a five-class problem, class 0 to class 4 always has distance
+16. A separate MMNP objective uses the raw, linear cumulative margins and is
+solely responsible for updating them.
 
 This is a CLOC-inspired extension of the hybrid baseline, not a replacement of
 PCOL and SCOLw with CLOC's MMNP objective. Training has two stages:
@@ -107,11 +110,10 @@ PCOL and SCOLw with CLOC's MMNP objective. Training has two stages:
 2. Freeze the margins, reset the validation scheduler state, and select the
    final checkpoint while continuing to optimize the network.
 
-Each adjacent margin is independently parameterized by a sigmoid, initialized
-around `0.2` with reproducible independent jitter, and constrained to
-`(0.05, 1)` without a fixed-sum constraint. The asymmetric initialization,
-positive floor, and smaller margin learning rate reduce complete margin
-collapse. Phase one runs for at least 20 epochs and freezes the margins once
+Each adjacent margin is independently parameterized by `softplus` and
+initialized uniformly in `[0.5, 1.0)`, following CLOC's margin-collapse
+precautions. Margins remain positive without an upper or fixed-sum constraint.
+Phase one runs for at least 20 epochs and freezes the margins once
 their largest epoch-to-epoch change stays below the configured tolerance for
 several epochs. It falls back to freezing at 30 epochs. Per-boundary values,
 their observed sum, convergence change, and freeze state are recorded in
