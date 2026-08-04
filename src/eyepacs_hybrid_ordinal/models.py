@@ -86,6 +86,30 @@ class RegressionHead(nn.Module):
         return self.net(features).squeeze(1)
 
 
+class SpatialAttention(nn.Module):
+    """CBAM spatial attention applied to a convolutional feature map."""
+
+    def __init__(self, kernel_size: int = 7) -> None:
+        super().__init__()
+        if kernel_size < 1 or kernel_size % 2 == 0:
+            raise ValueError("spatial attention kernel_size must be a positive odd integer.")
+        self.conv = nn.Conv2d(
+            2,
+            1,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            bias=False,
+        )
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        average_map = features.mean(dim=1, keepdim=True)
+        maximum_map = features.amax(dim=1, keepdim=True)
+        attention = torch.sigmoid(
+            self.conv(torch.cat((average_map, maximum_map), dim=1))
+        )
+        return features * attention
+
+
 class HybridOrdinalNet(nn.Module):
     """Backbone with PCOL/SCOLw projections and an ordinal regression head."""
 
@@ -98,6 +122,8 @@ class HybridOrdinalNet(nn.Module):
         regression_hidden_dim: int = 1280,
         dropout: float = 0.0,
         regression_input: str = "backbone",
+        spatial_attention: bool = False,
+        spatial_attention_kernel_size: int = 7,
     ) -> None:
         super().__init__()
         if regression_input not in {"backbone", "projection_concat"}:
@@ -107,6 +133,13 @@ class HybridOrdinalNet(nn.Module):
             )
 
         self.encoder, self.feature_dim = build_encoder(backbone, pretrained_imagenet)
+        self.spatial_attention = None
+        if spatial_attention:
+            if not backbone.lower().startswith("efficientnet"):
+                raise ValueError(
+                    "spatial attention currently requires an EfficientNet backbone."
+                )
+            self.spatial_attention = SpatialAttention(spatial_attention_kernel_size)
         self.regression_input = regression_input
         self.pcol_head = ProjectionHead(self.feature_dim, projection_hidden_dim, projection_dim, dropout=dropout)
         self.scol_head = ProjectionHead(self.feature_dim, projection_hidden_dim, projection_dim, dropout=dropout)
@@ -114,7 +147,12 @@ class HybridOrdinalNet(nn.Module):
         self.regression_head = RegressionHead(regression_input_dim, regression_hidden_dim, dropout=dropout)
 
     def forward(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
-        features = self.encoder(images)
+        if self.spatial_attention is None:
+            features = self.encoder(images)
+        else:
+            feature_map = self.encoder.features(images)
+            feature_map = self.spatial_attention(feature_map)
+            features = self.encoder.avgpool(feature_map)
         if features.ndim > 2:
             features = torch.flatten(features, start_dim=1)
 

@@ -520,6 +520,10 @@ def main() -> None:
         regression_hidden_dim=int(cfg["model"].get("regression_hidden_dim", 1280)),
         dropout=float(cfg["model"].get("dropout", 0.2)),
         regression_input=cfg["model"].get("regression_input", "backbone"),
+        spatial_attention=bool(cfg["model"].get("spatial_attention", False)),
+        spatial_attention_kernel_size=int(
+            cfg["model"].get("spatial_attention_kernel_size", 7)
+        ),
     ).to(device)
 
     loss_cfg = cfg["loss"]
