@@ -7,8 +7,8 @@ data:
   image_col: null
   label_col: null
   subject_col: null
-  image_size: 300
-  normalize: none
+  image_size: 384
+  normalize: imagenet
   batch_size: 24
   num_workers: 4
   max_samples: null
@@ -30,10 +30,11 @@ model:
   projection_dim: 128
   regression_input: projection_concat
   regression_hidden_dim: 1280
-  dropout: 0.0
+  dropout: 0.2
   num_classes: 5
   spatial_attention: true
   spatial_attention_kernel_size: 7
+  pooling: gem
 
 loss:
   alpha: 1.0
@@ -73,4 +74,4 @@ train:
   lr_plateau_factor: 0.2
   lr_plateau_patience: 5
   early_stopping_patience: 13
-  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384

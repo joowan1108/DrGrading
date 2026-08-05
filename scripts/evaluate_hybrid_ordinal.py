@@ -93,6 +93,7 @@ def main() -> None:
         spatial_attention_kernel_size=int(
             cfg["model"].get("spatial_attention_kernel_size", 7)
         ),
+        pooling=cfg["model"].get("pooling", "avg"),
     ).to(device)
     checkpoint = load_model_checkpoint(model, args.checkpoint, strict=True)
     model.eval()

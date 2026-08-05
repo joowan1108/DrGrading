@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torchvision import models
 
 
@@ -110,6 +111,21 @@ class SpatialAttention(nn.Module):
         return features * attention
 
 
+class GeMPooling(nn.Module):
+    """Generalized mean pooling with a learnable exponent."""
+
+    def __init__(self, initial_p: float = 3.0, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.p = nn.Parameter(torch.tensor(float(initial_p)))
+        self.eps = float(eps)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        p = self.p.clamp_min(self.eps)
+        features = features.float().clamp_min(self.eps)
+        pooled = F.adaptive_avg_pool2d(features.pow(p), 1)
+        return pooled.pow(1.0 / p)
+
+
 class HybridOrdinalNet(nn.Module):
     """Backbone with PCOL/SCOLw projections and an ordinal regression head."""
 
@@ -124,6 +140,7 @@ class HybridOrdinalNet(nn.Module):
         regression_input: str = "backbone",
         spatial_attention: bool = False,
         spatial_attention_kernel_size: int = 7,
+        pooling: str = "avg",
     ) -> None:
         super().__init__()
         if regression_input not in {"backbone", "projection_concat"}:
@@ -131,8 +148,11 @@ class HybridOrdinalNet(nn.Module):
                 "regression_input must be either 'backbone' or 'projection_concat', "
                 f"got {regression_input!r}."
             )
+        if pooling not in {"avg", "gem"}:
+            raise ValueError("pooling must be either 'avg' or 'gem'.")
 
         self.encoder, self.feature_dim = build_encoder(backbone, pretrained_imagenet)
+        self.uses_efficientnet_features = backbone.lower().startswith("efficientnet")
         self.spatial_attention = None
         if spatial_attention:
             if not backbone.lower().startswith("efficientnet"):
@@ -140,6 +160,9 @@ class HybridOrdinalNet(nn.Module):
                     "spatial attention currently requires an EfficientNet backbone."
                 )
             self.spatial_attention = SpatialAttention(spatial_attention_kernel_size)
+        if pooling == "gem" and not self.uses_efficientnet_features:
+            raise ValueError("GeM pooling currently requires an EfficientNet backbone.")
+        self.global_pool = GeMPooling() if pooling == "gem" else None
         self.regression_input = regression_input
         self.pcol_head = ProjectionHead(self.feature_dim, projection_hidden_dim, projection_dim, dropout=dropout)
         self.scol_head = ProjectionHead(self.feature_dim, projection_hidden_dim, projection_dim, dropout=dropout)
@@ -147,12 +170,17 @@ class HybridOrdinalNet(nn.Module):
         self.regression_head = RegressionHead(regression_input_dim, regression_hidden_dim, dropout=dropout)
 
     def forward(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
-        if self.spatial_attention is None:
+        if self.spatial_attention is None and self.global_pool is None:
             features = self.encoder(images)
         else:
             feature_map = self.encoder.features(images)
-            feature_map = self.spatial_attention(feature_map)
-            features = self.encoder.avgpool(feature_map)
+            if self.spatial_attention is not None:
+                feature_map = self.spatial_attention(feature_map)
+            features = (
+                self.global_pool(feature_map)
+                if self.global_pool is not None
+                else self.encoder.avgpool(feature_map)
+            )
         if features.ndim > 2:
             features = torch.flatten(features, start_dim=1)
 

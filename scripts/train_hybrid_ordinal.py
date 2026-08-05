@@ -524,6 +524,7 @@ def main() -> None:
         spatial_attention_kernel_size=int(
             cfg["model"].get("spatial_attention_kernel_size", 7)
         ),
+        pooling=cfg["model"].get("pooling", "avg"),
     ).to(device)
 
     loss_cfg = cfg["loss"]

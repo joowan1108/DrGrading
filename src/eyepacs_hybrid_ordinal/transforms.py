@@ -42,7 +42,15 @@ def normalization_transform(mode: str) -> list:
 def make_train_transform(image_size: int = 300, normalize: str = "none") -> T.Compose:
     return T.Compose(
         [
+            CropBlackBorder(),
             T.Resize((image_size, image_size), interpolation=T.InterpolationMode.BICUBIC),
+            T.RandomHorizontalFlip(p=0.5),
+            T.RandomRotation(
+                degrees=10,
+                interpolation=T.InterpolationMode.BICUBIC,
+                fill=0,
+            ),
+            T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.05),
             T.ToTensor(),
             *normalization_transform(normalize),
         ]
@@ -52,6 +60,7 @@ def make_train_transform(image_size: int = 300, normalize: str = "none") -> T.Co
 def make_eval_transform(image_size: int = 300, normalize: str = "none") -> T.Compose:
     return T.Compose(
         [
+            CropBlackBorder(),
             T.Resize((image_size, image_size), interpolation=T.InterpolationMode.BICUBIC),
             T.ToTensor(),
             *normalization_transform(normalize),

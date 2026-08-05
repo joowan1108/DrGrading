@@ -20,6 +20,7 @@ def test_spatial_attention_efficientnet_forward_shapes() -> None:
         regression_hidden_dim=16,
         regression_input="projection_concat",
         spatial_attention=True,
+        pooling="gem",
     ).eval()
 
     with torch.no_grad():
@@ -29,3 +30,5 @@ def test_spatial_attention_efficientnet_forward_shapes() -> None:
     assert outputs["pcol"].shape == (2, 8)
     assert outputs["scol"].shape == (2, 8)
     assert outputs["prediction"].shape == (2,)
+    assert model.global_pool is not None
+    assert model.global_pool.p.requires_grad
