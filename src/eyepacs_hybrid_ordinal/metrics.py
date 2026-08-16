@@ -4,6 +4,7 @@ from collections import defaultdict
 
 import numpy as np
 import torch
+from sklearn.metrics import cohen_kappa_score
 
 from .ordinal_metrics import ordinal_error_distribution
 
@@ -47,8 +48,28 @@ def aggregate_predictions(
     safe_pred_array = np.nan_to_num(pred_array, nan=0.0, posinf=float(num_classes - 1), neginf=0.0)
     class_preds = np.rint(safe_pred_array).clip(0, num_classes - 1).astype(np.int64)
 
+    supported_classes = np.unique(target_array)
+    macro_accuracy = np.mean(
+        [
+            (class_preds[target_array == label] == label).mean()
+            for label in supported_classes
+        ]
+    )
+    quadratic_weighted_kappa = float(
+        cohen_kappa_score(
+            target_array,
+            class_preds,
+            labels=list(range(num_classes)),
+            weights="quadratic",
+        )
+    )
+    if not np.isfinite(quadratic_weighted_kappa):
+        quadratic_weighted_kappa = float(np.array_equal(class_preds, target_array))
+
     metrics: dict[str, object] = {
         "accuracy": float((class_preds == target_array).mean()),
+        "macro_accuracy": float(macro_accuracy),
+        "quadratic_weighted_kappa": quadratic_weighted_kappa,
         "mae": float(np.abs(class_preds - target_array).mean()),
         "continuous_mae": float(np.abs(safe_pred_array - target_array).mean()),
         "rmse_loss": float(np.sqrt(np.mean(np.square(safe_pred_array - target_array)))),

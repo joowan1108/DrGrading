@@ -111,6 +111,8 @@ def main() -> None:
     metrics = aggregate_predictions(predictions, targets_all, num_classes)
     print(f"checkpoint_epoch={checkpoint.get('epoch', 'unknown')}")
     print(f"accuracy={metrics['accuracy']:.4f}")
+    print(f"macro_accuracy={metrics['macro_accuracy']:.4f}")
+    print(f"quadratic_weighted_kappa={metrics['quadratic_weighted_kappa']:.4f}")
     print(f"mae={metrics['mae']:.4f}")
     print(f"continuous_mae={metrics['continuous_mae']:.4f}")
     print(f"rmse={metrics['rmse_loss']:.4f}")

@@ -53,6 +53,8 @@ def test_aggregate_predictions_keeps_global_and_per_class_ordinal_metrics() -> N
     assert result["adjacent_count"] == 2
     assert result["non_adjacent_count"] == 1
     assert result["within_one_class_count"] == 4
+    assert result["macro_accuracy"] == 0.4
+    assert np.isclose(result["quadratic_weighted_kappa"], 2.0 / 3.0)
     assert result["per_class"]["1"]["accuracy"] == 0.0
     assert result["per_class"]["1"]["adjacent_rate"] == 1.0
     assert result["per_class"]["4"]["non_adjacent_rate"] == 1.0

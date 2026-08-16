@@ -378,6 +378,8 @@ def train_one_epoch(
     ]
     meters = {name: AverageMeter() for name in meter_names}
     mmnp_boundary_stats = None
+    epoch_predictions: list[float] = []
+    epoch_targets: list[int] = []
     progress = tqdm(contrastive_loader, desc=f"train {epoch}", leave=False)
     shared_batch = regression_loader is contrastive_loader
     regression_iter = None if shared_batch else iter(regression_loader)
@@ -455,9 +457,22 @@ def train_one_epoch(
             )
         meters["accuracy"].update(metric_values["accuracy"], batch_size)
         meters["mae"].update(metric_values["mae"], batch_size)
+        epoch_predictions.extend(
+            regression_outputs["prediction"].detach().cpu().float().tolist()
+        )
+        epoch_targets.extend(regression_targets.detach().cpu().long().tolist())
         progress.set_postfix(loss=f"{meters['total'].avg:.4f}", acc=f"{meters['accuracy'].avg:.3f}")
 
     metrics = {name: meter.avg for name, meter in meters.items()}
+    epoch_metrics = aggregate_predictions(
+        epoch_predictions,
+        epoch_targets,
+        int(cfg["model"].get("num_classes", 5)),
+    )
+    metrics["macro_accuracy"] = epoch_metrics["macro_accuracy"]
+    metrics["quadratic_weighted_kappa"] = epoch_metrics[
+        "quadratic_weighted_kappa"
+    ]
     if mmnp_boundary_stats is not None:
         num_boundaries = int(cfg["model"].get("num_classes", 5)) - 1
         for boundary in range(num_boundaries):
@@ -478,12 +493,22 @@ def train_one_epoch(
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, amp_enabled, cfg, description: str = "val"):
+def evaluate(
+    model,
+    loader,
+    device,
+    amp_enabled,
+    cfg,
+    description: str = "val",
+    collect_embeddings: bool = False,
+):
     model.eval()
     predictions: list[float] = []
     targets_all: list[int] = []
+    image_ids_all: list[str] = []
+    embeddings = []
 
-    for images, targets, _ in tqdm(loader, desc=description, leave=False):
+    for images, targets, image_ids in tqdm(loader, desc=description, leave=False):
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True).long()
         with autocast(enabled=amp_enabled):
@@ -491,9 +516,94 @@ def evaluate(model, loader, device, amp_enabled, cfg, description: str = "val"):
 
         predictions.extend(outputs["prediction"].detach().cpu().float().tolist())
         targets_all.extend(targets.detach().cpu().long().tolist())
+        if collect_embeddings:
+            pcol = torch.nn.functional.normalize(outputs["pcol"].float(), dim=1)
+            scol = torch.nn.functional.normalize(outputs["scol"].float(), dim=1)
+            embeddings.append(torch.cat((pcol, scol), dim=1).cpu())
+            image_ids_all.extend(str(image_id) for image_id in image_ids)
 
     metrics = aggregate_predictions(predictions, targets_all, int(cfg["model"].get("num_classes", 5)))
+    if collect_embeddings:
+        return metrics, torch.cat(embeddings).numpy(), predictions, targets_all, image_ids_all
     return metrics
+
+
+def save_outer_test_tsne(
+    output_dir: Path,
+    embeddings,
+    predictions: list[float],
+    targets: list[int],
+    image_ids: list[str],
+    seed: int,
+) -> dict:
+    import csv
+
+    import matplotlib
+    import numpy as np
+    from sklearn.decomposition import PCA
+    from sklearn.manifold import TSNE
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    sample_count = len(targets)
+    if sample_count < 3:
+        raise ValueError("t-SNE requires at least 3 outer-test samples.")
+
+    pca_components = min(50, embeddings.shape[1], sample_count - 1)
+    reduced = PCA(n_components=pca_components, random_state=seed).fit_transform(embeddings)
+    perplexity = min(30.0, float(sample_count - 1))
+    coordinates = TSNE(
+        n_components=2,
+        perplexity=perplexity,
+        init="pca",
+        learning_rate="auto",
+        random_state=seed,
+    ).fit_transform(reduced)
+
+    csv_path = output_dir / "tsne_outer_test.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["image_id", "label", "prediction", "tsne_x", "tsne_y"])
+        writer.writerows(
+            (
+                image_id,
+                target,
+                prediction,
+                float(point[0]),
+                float(point[1]),
+            )
+            for image_id, target, prediction, point in zip(
+                image_ids, targets, predictions, coordinates
+            )
+        )
+
+    figure, axis = plt.subplots(figsize=(9, 7))
+    target_array = np.asarray(targets)
+    for label in sorted(np.unique(target_array)):
+        mask = target_array == label
+        axis.scatter(
+            coordinates[mask, 0],
+            coordinates[mask, 1],
+            s=12,
+            alpha=0.7,
+            label=f"Class {label}",
+        )
+    axis.set(title="Outer-test t-SNE", xlabel="t-SNE 1", ylabel="t-SNE 2")
+    axis.legend(title="True label", markerscale=1.5)
+    figure.tight_layout()
+    image_path = output_dir / "tsne_outer_test.png"
+    figure.savefig(image_path, dpi=200)
+    plt.close(figure)
+
+    return {
+        "embedding": "l2_normalized_pcol_scol_concat",
+        "samples": sample_count,
+        "perplexity": perplexity,
+        "random_state": seed,
+        "image_file": image_path.name,
+        "coordinates_file": csv_path.name,
+    }
 
 
 def main() -> None:
@@ -790,6 +900,8 @@ def main() -> None:
             f"train_acc={train_metrics['accuracy']:.4f} "
             f"val_rmse={val_metrics['rmse_loss']:.4f} "
             f"val_acc={val_metrics['accuracy']:.4f} "
+            f"val_macro_acc={val_metrics['macro_accuracy']:.4f} "
+            f"val_qwk={val_metrics['quadratic_weighted_kappa']:.4f} "
             f"val_mae={val_metrics['mae']:.4f} "
             f"lr={optimizer.param_groups[0]['lr']:.2e}"
             f"{margin_text}"
@@ -862,7 +974,29 @@ def main() -> None:
     test_metrics = None
     if test_loader is not None:
         load_model_checkpoint(model, output_dir / "best.pt", strict=True)
-        test_metrics = evaluate(model, test_loader, device, amp_enabled, cfg, description="test")
+        (
+            test_metrics,
+            test_embeddings,
+            test_predictions,
+            test_targets,
+            test_image_ids,
+        ) = evaluate(
+            model,
+            test_loader,
+            device,
+            amp_enabled,
+            cfg,
+            description="test",
+            collect_embeddings=True,
+        )
+        test_metrics["tsne"] = save_outer_test_tsne(
+            output_dir,
+            test_embeddings,
+            test_predictions,
+            test_targets,
+            test_image_ids,
+            seed=int(cfg.get("seed", 42)),
+        )
         save_json(
             output_dir / "test_metrics.json",
             {
@@ -876,6 +1010,8 @@ def main() -> None:
             f"outer test (best epoch {best_epoch:03d}): "
             f"rmse={test_metrics['rmse_loss']:.4f} "
             f"acc={test_metrics['accuracy']:.4f} "
+            f"macro_acc={test_metrics['macro_accuracy']:.4f} "
+            f"qwk={test_metrics['quadratic_weighted_kappa']:.4f} "
             f"mae={test_metrics['mae']:.4f}"
         )
 

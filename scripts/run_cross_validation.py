@@ -73,6 +73,10 @@ def main() -> None:
                 "fold": fold_index,
                 "best_epoch": fold_metrics["best_epoch"],
                 "accuracy": float(test_metrics["accuracy"]),
+                "macro_accuracy": float(test_metrics["macro_accuracy"]),
+                "quadratic_weighted_kappa": float(
+                    test_metrics["quadratic_weighted_kappa"]
+                ),
                 "mae": float(test_metrics["mae"]),
                 "continuous_mae": float(test_metrics["continuous_mae"]),
                 "rmse_loss": float(test_metrics["rmse_loss"]),
@@ -87,6 +91,7 @@ def main() -> None:
                 "non_adjacent_rate": float(test_metrics["non_adjacent_rate"]),
                 "within_one_class_rate": float(test_metrics["within_one_class_rate"]),
                 "per_class": test_metrics["per_class"],
+                "tsne": test_metrics.get("tsne"),
                 "learned_margins": best_margins.get("by_boundary", {}),
             }
         )
@@ -122,6 +127,12 @@ def main() -> None:
             ]
         },
         "accuracy": mean_std([item["accuracy"] for item in fold_results]),
+        "macro_accuracy": mean_std(
+            [item["macro_accuracy"] for item in fold_results]
+        ),
+        "quadratic_weighted_kappa": mean_std(
+            [item["quadratic_weighted_kappa"] for item in fold_results]
+        ),
         "mae": mean_std([item["mae"] for item in fold_results]),
         "continuous_mae": mean_std([item["continuous_mae"] for item in fold_results]),
         "rmse_loss": mean_std([item["rmse_loss"] for item in fold_results]),
@@ -153,6 +164,8 @@ def main() -> None:
     print("cross-validation summary")
     for metric in [
         "accuracy",
+        "macro_accuracy",
+        "quadratic_weighted_kappa",
         "mae",
         "continuous_mae",
         "rmse_loss",
