@@ -34,6 +34,16 @@ def test_margins_initialize_to_configured_value() -> None:
     torch.testing.assert_close(margins.margin_values(), torch.full((4,), 0.5))
 
 
+def test_margins_initialize_to_boundary_values() -> None:
+    values = [0.385, 0.451, 0.253, 0.330]
+    margins = CumulativeOrdinalMargins(
+        num_classes=5,
+        initial_margin_values=values,
+    )
+
+    torch.testing.assert_close(margins.margin_values(), torch.tensor(values))
+
+
 def test_softplus_margins_are_positive_unbounded_and_without_fixed_sum() -> None:
     margins = CumulativeOrdinalMargins(num_classes=4, initial_margin=0.5)
 

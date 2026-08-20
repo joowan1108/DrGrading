@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -16,6 +18,7 @@ class CumulativeOrdinalMargins(nn.Module):
         initial_margin_jitter: float = 0.0,
         initial_margin_min: float | None = None,
         initial_margin_max: float | None = None,
+        initial_margin_values: Sequence[float] | None = None,
         parameterization: str = "softplus",
     ) -> None:
         super().__init__()
@@ -35,11 +38,31 @@ class CumulativeOrdinalMargins(nn.Module):
             raise ValueError(
                 "initial_margin_min and initial_margin_max must be provided together."
             )
+        if initial_margin_values is not None and (
+            initial_margin_min is not None or initial_margin_jitter > 0
+        ):
+            raise ValueError(
+                "initial_margin_values cannot be combined with a random range or jitter."
+            )
 
         self.num_classes = int(num_classes)
         self.minimum_margin = float(minimum_margin)
         self.parameterization = parameterization
-        if initial_margin_min is not None and initial_margin_max is not None:
+        if initial_margin_values is not None:
+            initial_values = torch.tensor(list(initial_margin_values), dtype=torch.float32)
+            if initial_values.numel() != self.num_classes - 1:
+                raise ValueError(
+                    "initial_margin_values must contain one value per adjacent class boundary."
+                )
+            if not torch.isfinite(initial_values).all() or torch.any(
+                initial_values <= self.minimum_margin
+            ):
+                raise ValueError(
+                    "initial_margin_values must be finite and greater than minimum_margin."
+                )
+            if parameterization == "sigmoid" and torch.any(initial_values >= 1):
+                raise ValueError("sigmoid margin initialization values must be less than 1.")
+        elif initial_margin_min is not None and initial_margin_max is not None:
             lower = float(initial_margin_min)
             upper = float(initial_margin_max)
             if not self.minimum_margin < lower < upper:

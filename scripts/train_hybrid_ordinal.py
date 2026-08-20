@@ -79,6 +79,7 @@ def build_learnable_margins(cfg: dict, device: torch.device):
     initial_margin_jitter = float(loss_cfg.get("margin_init_jitter", 0.0))
     initial_margin_min = loss_cfg.get("margin_init_min")
     initial_margin_max = loss_cfg.get("margin_init_max")
+    initial_margin_values = loss_cfg.get("margin_init_values")
     parameterization = loss_cfg.get("margin_parameterization", "softplus")
     if not 1 <= phase1_min_epochs <= phase1_max_epochs < epochs:
         raise ValueError(
@@ -109,6 +110,7 @@ def build_learnable_margins(cfg: dict, device: torch.device):
         initial_margin_max=(
             float(initial_margin_max) if initial_margin_max is not None else None
         ),
+        initial_margin_values=initial_margin_values,
         parameterization=parameterization,
     ).to(device)
 
