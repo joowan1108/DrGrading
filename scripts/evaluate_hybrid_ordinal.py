@@ -17,13 +17,15 @@ from eyepacs_hybrid_ordinal.metrics import aggregate_predictions
 from eyepacs_hybrid_ordinal.models import HybridOrdinalNet, load_model_checkpoint
 from eyepacs_hybrid_ordinal.splitting import build_nested_split_indices
 from eyepacs_hybrid_ordinal.transforms import make_eval_transform
-from eyepacs_hybrid_ordinal.utils import load_config, resolve_device, worker_count
+from eyepacs_hybrid_ordinal.utils import ensure_dir, load_config, resolve_device, save_json, worker_count
+from train_hybrid_ordinal import save_outer_test_tsne
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a hybrid ordinal checkpoint on the configured EyePACS split.")
     parser.add_argument("--config", default="configs/hybrid_eyepacs_efficientnet_v2_s.yaml")
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--tsne", action="store_true")
     return parser.parse_args()
 
 
@@ -101,14 +103,35 @@ def main() -> None:
     amp_enabled = bool(cfg["train"].get("amp", True)) and device.type == "cuda"
     predictions: list[float] = []
     targets_all: list[int] = []
-    for images, targets, _ in tqdm(loader, desc="evaluate"):
+    image_ids_all: list[str] = []
+    embeddings = []
+    for images, targets, image_ids in tqdm(loader, desc="evaluate"):
         images = images.to(device, non_blocking=True)
         with autocast(enabled=amp_enabled):
             outputs = model(images)
         predictions.extend(outputs["prediction"].detach().cpu().float().tolist())
         targets_all.extend(targets.long().tolist())
+        if args.tsne:
+            pcol = torch.nn.functional.normalize(outputs["pcol"].float(), dim=1)
+            scol = torch.nn.functional.normalize(outputs["scol"].float(), dim=1)
+            embeddings.append(torch.cat((pcol, scol), dim=1).cpu())
+            image_ids_all.extend(str(image_id) for image_id in image_ids)
 
     metrics = aggregate_predictions(predictions, targets_all, num_classes)
+    output_dir = ensure_dir(Path(args.checkpoint).resolve().parent)
+    if args.tsne:
+        metrics["tsne"] = save_outer_test_tsne(
+            output_dir,
+            torch.cat(embeddings).numpy(),
+            predictions,
+            targets_all,
+            image_ids_all,
+            seed=int(cfg.get("seed", 42)),
+        )
+    save_json(
+        output_dir / "evaluation_metrics.json",
+        {"checkpoint": str(Path(args.checkpoint).resolve()), "test": metrics},
+    )
     print(f"checkpoint_epoch={checkpoint.get('epoch', 'unknown')}")
     print(f"accuracy={metrics['accuracy']:.4f}")
     print(f"macro_accuracy={metrics['macro_accuracy']:.4f}")
