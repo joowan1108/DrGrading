@@ -32,13 +32,13 @@ model:
   regression_hidden_dim: 1280
   dropout: 0.2
   num_classes: 5
-  spatial_attention: true
+  spatial_attention: false
   spatial_attention_kernel_size: 7
   pooling: gem
 
 loss:
-  alpha: 1.0
-  beta: 1.0
+  alpha: 0.1
+  beta: 0.1
   rmse_weight: 1.0
   mmnp_weight: 2.0
   temperature: 1.0
@@ -71,4 +71,4 @@ train:
   lr_plateau_factor: 0.2
   lr_plateau_patience: 5
   early_stopping_patience: 13
-  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110
+  output_dir: checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_cloc110_learnable_dist
