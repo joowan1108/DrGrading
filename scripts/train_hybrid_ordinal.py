@@ -19,6 +19,7 @@ from eyepacs_hybrid_ordinal.data import (
     load_eyepacs_dataframe,
 )
 from eyepacs_hybrid_ordinal.losses import (
+    BalancedSoftmaxLoss,
     CumulativeOrdinalMargins,
     PrototypeContrastiveOrdinalLoss,
     WeightedSupervisedContrastiveOrdinalLoss,
@@ -317,11 +318,13 @@ def compute_losses(
         learnable_margins=learnable_margins,
     )
     rmse = rmse_loss(regression_outputs["prediction"], regression_targets.float())
+    classification = criteria["classification"](regression_outputs["logits"], regression_targets.long())
     total = (
         float(loss_cfg.get("alpha", 1.0)) * pcol
         + float(loss_cfg.get("beta", 1.0)) * scol
         + float(loss_cfg.get("rmse_weight", 1.0)) * rmse
         + float(loss_cfg.get("mmnp_weight", 1.0)) * mmnp
+        + float(loss_cfg.get("classification_weight", 0.0)) * classification
     )
     return {
         "total": total,
@@ -329,6 +332,8 @@ def compute_losses(
         "scol": scol,
         "mmnp": mmnp,
         "rmse": rmse,
+        "classification": classification,
+
     }
 
 
@@ -376,6 +381,7 @@ def train_one_epoch(
         "rmse",
         "accuracy",
         "mae",
+        "classification",
         "mmnp_active_violation_rate",
     ]
     meters = {name: AverageMeter() for name in meter_names}
@@ -624,6 +630,21 @@ def main() -> None:
     )
     contrastive_loader, regression_loader, val_loader, test_loader = make_dataloaders(cfg)
 
+    train_targets = torch.as_tensor(
+        contrastive_loader.dataset.targets,
+        dtype=torch.long,
+    )
+
+    class_counts = torch.bincount(
+        train_targets,
+        minlength=int(cfg["model"].get("num_classes", 5)),
+    ).float()
+
+    print(
+        f"Balanced Softmax class counts: "
+        f"{class_counts.tolist()}"
+    )
+
     model = HybridOrdinalNet(
         backbone=cfg["model"].get("backbone", "efficientnet_v2_s"),
         pretrained_imagenet=bool(cfg["model"].get("pretrained_imagenet", False)),
@@ -637,6 +658,7 @@ def main() -> None:
             cfg["model"].get("spatial_attention_kernel_size", 7)
         ),
         pooling=cfg["model"].get("pooling", "avg"),
+        num_classes=int(cfg["model"].get("num_classes", 5)),
     ).to(device)
 
     loss_cfg = cfg["loss"]
@@ -672,6 +694,7 @@ def main() -> None:
             reduction=loss_cfg.get("mmnp_reduction", "mean"),
             objective="mmnp",
         ),
+        "classification": BalancedSoftmaxLoss(class_counts),
     }
 
     learnable_margins = build_learnable_margins(cfg, device)

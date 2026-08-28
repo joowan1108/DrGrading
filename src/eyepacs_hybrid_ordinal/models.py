@@ -86,6 +86,17 @@ class RegressionHead(nn.Module):
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         return self.net(features).squeeze(1)
 
+class ClassificationHead(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        num_classes: int = 5,
+    ) -> None:
+        super().__init__()
+        self.fc = nn.Linear(input_dim, num_classes)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        return self.fc(features)
 
 class SpatialAttention(nn.Module):
     """CBAM spatial attention applied to a convolutional feature map."""
@@ -141,6 +152,7 @@ class HybridOrdinalNet(nn.Module):
         spatial_attention: bool = False,
         spatial_attention_kernel_size: int = 7,
         pooling: str = "avg",
+        num_classes: int = 5,
     ) -> None:
         super().__init__()
         if regression_input not in {"backbone", "projection_concat"}:
@@ -168,6 +180,7 @@ class HybridOrdinalNet(nn.Module):
         self.scol_head = ProjectionHead(self.feature_dim, projection_hidden_dim, projection_dim, dropout=dropout)
         regression_input_dim = 2 * projection_dim if regression_input == "projection_concat" else self.feature_dim
         self.regression_head = RegressionHead(regression_input_dim, regression_hidden_dim, dropout=dropout)
+        self.classification_head = ClassificationHead(input_dim=regression_input_dim, num_classes=num_classes)
 
     def forward(self, images: torch.Tensor) -> dict[str, torch.Tensor]:
         if self.spatial_attention is None and self.global_pool is None:
@@ -198,6 +211,8 @@ class HybridOrdinalNet(nn.Module):
                 "pcol": pcol_embedding,
                 "scol": scol_embedding,
                 "prediction": self.regression_head(regression_features),
+                "logits": self.classification_head(regression_features),
+
             }
 
 

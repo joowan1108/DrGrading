@@ -405,3 +405,31 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
 
 def rmse_loss(predictions: torch.Tensor, targets: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     return torch.sqrt(F.mse_loss(predictions.float(), targets.float()) + eps)
+
+class BalancedSoftmaxLoss(nn.Module):
+    def __init__(self, class_counts):
+        super().__init__()
+        counts = torch.as_tensor(
+            class_counts,
+            dtype=torch.float32,
+        ).clamp_min(1.0)
+
+        self.register_buffer(
+            "log_class_counts",
+            torch.log(counts),
+        )
+
+    def forward(self, logits, targets):
+        adjusted_logits = (
+            logits
+            + self.log_class_counts.to(
+                device=logits.device,
+                dtype=logits.dtype,
+            )
+        )
+
+        return F.cross_entropy(
+            adjusted_logits,
+            targets,
+        )
+    

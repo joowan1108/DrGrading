@@ -63,6 +63,7 @@ loss:
   normalize_learnable_margin_mean: true
   mmnp_reduction: mean
   reduction: mean
+  classification_weight: 0.1
 
 train:
   epochs: 75
