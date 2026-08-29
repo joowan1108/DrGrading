@@ -20,7 +20,7 @@ BASE_CONFIG = Path(
 
 # Optuna 결과 저장 위치
 OUTPUT_ROOT = Path(
-    "C:/DrGrading_outputs/optuna_cloc_ld_gem_bs_weight"
+    "C:/DrGrading_outputs/optuna_gem_no_spatial_0814_bs_weight"
 )
 
 # 재린님 컴퓨터와 동일하게
@@ -260,13 +260,13 @@ pruner = optuna.pruners.MedianPruner(
 )
 
 study = optuna.create_study(
-    study_name="balanced_softmax_weight",
+    study_name="gem_no_spatial_0814_balanced_softmax_weight",
     direction="maximize",
     sampler=sampler,
     pruner=pruner,
 
     # PC가 꺼져도 이전 trial 기록 보존
-    storage="sqlite:///optuna_bs_weight.db",
+    storage="sqlite:///optuna_gem_no_spatial_0814_bs_weight.db",
     load_if_exists=True,
 )
 
