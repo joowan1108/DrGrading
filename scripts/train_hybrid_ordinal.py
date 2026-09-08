@@ -537,6 +537,8 @@ def save_outer_test_tsne(
     targets: list[int],
     image_ids: list[str],
     seed: int,
+    file_stem: str = "tsne_outer_test",
+    title: str = "Outer-test t-SNE",
 ) -> dict:
     import csv
 
@@ -563,7 +565,7 @@ def save_outer_test_tsne(
         random_state=seed,
     ).fit_transform(reduced)
 
-    csv_path = output_dir / "tsne_outer_test.csv"
+    csv_path = output_dir / f"{file_stem}.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["image_id", "label", "prediction", "tsne_x", "tsne_y"])
@@ -591,10 +593,10 @@ def save_outer_test_tsne(
             alpha=0.7,
             label=f"Class {label}",
         )
-    axis.set(title="Outer-test t-SNE", xlabel="t-SNE 1", ylabel="t-SNE 2")
+    axis.set(title=title, xlabel="t-SNE 1", ylabel="t-SNE 2")
     axis.legend(title="True label", markerscale=1.5)
     figure.tight_layout()
-    image_path = output_dir / "tsne_outer_test.png"
+    image_path = output_dir / f"{file_stem}.png"
     figure.savefig(image_path, dpi=200)
     plt.close(figure)
 

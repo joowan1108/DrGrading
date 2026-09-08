@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from eyepacs_hybrid_ordinal.data import EyePACSDataset, build_split_indices, load_eyepacs_dataframe
-from eyepacs_hybrid_ordinal.metrics import aggregate_predictions
+from eyepacs_hybrid_ordinal.metrics import aggregate_predictions, ordinal_class_predictions
 from eyepacs_hybrid_ordinal.models import HybridOrdinalNet, load_model_checkpoint
 from eyepacs_hybrid_ordinal.splitting import build_nested_split_indices
 from eyepacs_hybrid_ordinal.transforms import make_eval_transform
@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="configs/hybrid_eyepacs_efficientnet_v2_s.yaml")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--tsne", action="store_true")
+    parser.add_argument("--tsne-correct-only", action="store_true")
     return parser.parse_args()
 
 
@@ -105,13 +106,14 @@ def main() -> None:
     targets_all: list[int] = []
     image_ids_all: list[str] = []
     embeddings = []
+    make_tsne = args.tsne or args.tsne_correct_only
     for images, targets, image_ids in tqdm(loader, desc="evaluate"):
         images = images.to(device, non_blocking=True)
         with autocast(enabled=amp_enabled):
             outputs = model(images)
         predictions.extend(outputs["prediction"].detach().cpu().float().tolist())
         targets_all.extend(targets.long().tolist())
-        if args.tsne:
+        if make_tsne:
             pcol = torch.nn.functional.normalize(outputs["pcol"].float(), dim=1)
             scol = torch.nn.functional.normalize(outputs["scol"].float(), dim=1)
             embeddings.append(torch.cat((pcol, scol), dim=1).cpu())
@@ -119,14 +121,36 @@ def main() -> None:
 
     metrics = aggregate_predictions(predictions, targets_all, num_classes)
     output_dir = ensure_dir(Path(args.checkpoint).resolve().parent)
-    if args.tsne:
-        metrics["tsne"] = save_outer_test_tsne(
+    if make_tsne:
+        embedding_array = torch.cat(embeddings).numpy()
+        tsne_predictions = predictions
+        tsne_targets = targets_all
+        tsne_image_ids = image_ids_all
+        file_stem = "tsne_outer_test"
+        title = "Outer-test t-SNE"
+        metric_key = "tsne"
+        if args.tsne_correct_only:
+            correct_mask = (
+                ordinal_class_predictions(torch.tensor(predictions), num_classes)
+                == torch.tensor(targets_all)
+            ).numpy()
+            embedding_array = embedding_array[correct_mask]
+            tsne_predictions = [p for p, keep in zip(predictions, correct_mask) if keep]
+            tsne_targets = [t for t, keep in zip(targets_all, correct_mask) if keep]
+            tsne_image_ids = [i for i, keep in zip(image_ids_all, correct_mask) if keep]
+            file_stem = "tsne_outer_test_correct"
+            title = "Correctly classified outer-test samples"
+            metric_key = "tsne_correct_only"
+
+        metrics[metric_key] = save_outer_test_tsne(
             output_dir,
-            torch.cat(embeddings).numpy(),
-            predictions,
-            targets_all,
-            image_ids_all,
+            embedding_array,
+            tsne_predictions,
+            tsne_targets,
+            tsne_image_ids,
             seed=int(cfg.get("seed", 42)),
+            file_stem=file_stem,
+            title=title,
         )
     save_json(
         output_dir / "evaluation_metrics.json",
