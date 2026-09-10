@@ -1,111 +1,172 @@
-# EyePACS 실험 결과 요약
+# EyePACS 실험 결과 종합 요약
 
 ## 1. 자료 범위와 해석 기준
 
-`checkpoints.tar.gz`에서 실험 파일을 추출하여 각 디렉터리의 `run_config.json`과 `best_metrics.json`을 연결해 정리하였다. 최상위 실험 디렉터리는 11개이며, `hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384/fold_0`의 하위 실행까지 포함하면 실행 설정은 총 12개이다. 이 가운데 `best_metrics.json`이 존재하는 실행은 11개이고, `hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam_01`에는 설정 파일만 존재한다.
+이번 요약은 새로 수집한 `checkpoints_all_json.tar.gz`의 모든 `metrics.json`을 기준으로 다시 작성하였다. 아카이브에는 `metrics.json` 46개, `run_config.json` 12개, `best_metrics.json` 11개, `evaluation_metrics.json` 3개가 들어 있다. `metrics.json`이 있는 실행 가운데 `run_config.json`도 함께 존재하는 실행은 11개이고, 나머지 35개는 실행 당시 설정 파일이 남아 있지 않다.
 
-이후 별도로 제공된 순수 baseline의 설정과 결과를 BL로 추가하였다. 해당 실행은 `hybrid_eyepacs_efficientnet_v2_s_projection_concat_scolw_validation_10fold/fold_0`이며, MMNP, spatial attention, 학습 가능한 클래스 경계 및 GeM pooling을 적용하기 전의 비교 기준이다.
+다음 두 쌍은 수치가 완전히 동일한 중복 저장본이다.
 
-압축 파일에는 `evaluation_metrics.json`이 포함되어 있지 않다. 따라서 A1–A6, CV1 및 B1–B5는 모두 최적 체크포인트가 선택된 시점의 **검증 세트 성능**이며, 외부 테스트 세트의 최종 성능으로 해석해서는 안 된다. 모든 `best_metrics.json`은 `val.rmse_loss`를 체크포인트 선택 기준으로 사용한다. BL은 별도로 제공된 결과에 `best_val`과 `test`가 모두 포함되어 있어 두 값을 구분하여 정리하였다.
+- `hybrid_eyepacs_efficientnet_v2_s/metrics.json` = `hybrid_eyepacs_efficientnet_v2_s/fold_0/metrics.json`
+- `hybrid_eyepacs_efficientnet_v2_s_projection_concat_scolw_validation/metrics.json` = `hybrid_eyepacs_efficientnet_v2_s_projection_concat_scolw_validation_10fold/fold_0/metrics.json`
 
-일부 이전 실행에는 `macro_accuracy`와 `quadratic_weighted_kappa`가 기록되어 있지 않다. 비교표의 Macro Accuracy는 모든 실행에 동일한 기준을 적용하기 위해 Class 0–4의 클래스별 정확도를 단순 평균하여 다시 계산하였다. QWK는 파일에 저장된 값만 제시한다.
+따라서 파일은 46개이지만 독립적인 수치 결과는 최대 44개이다. 설정 파일이 없는 실행은 디렉터리명과 Git 이력으로 조건을 추정하였다. 이 경우 표의 수치는 `metrics.json`에서 직접 읽은 확정값이지만, 조건 해석은 **이름 기반 추정**이며 엄밀한 단일 변수 실험으로 간주하지 않는다. `run_config.json`이 있는 실행만 **설정 확인**으로 표시하였다.
 
-## 2. 공통 실험 설정
+모든 검증 표는 `best_val`을 사용한다. 이는 각 실행에서 `best_val_rmse_loss`가 가장 낮았던 checkpoint의 성능이다. `Macro`는 Class 0–4 정확도의 단순 평균이고, `Minor`는 본 연구의 소수 클래스인 Class 1, 3, 4 정확도의 평균이다. Acc, Macro, C0–C4 및 Minor의 단위는 %, MAE는 원래 척도이다.
 
-대부분의 실험은 다음 조건을 공유한다.
+별도 `evaluation_metrics.json`은 세 실행에만 있지만, 22개의 `metrics.json`에는 `test` 결과가 포함되어 있다. 두 파일이 모두 존재하는 세 실행에서는 test 값이 서로 일치하였다. 검증 결과와 테스트 결과는 구분하여 제시한다.
 
-- 데이터셋: EyePACS (`trainLabels.csv`, 5개 등급)
-- Backbone: ImageNet 사전학습 EfficientNetV2-S
-- Batch size: 24
-- Seed: 42
-- 환자 독립적 분할 및 stratified batch 사용
-- Projection head: hidden dimension 1,280, output dimension 128
-- Regression input: projection과 backbone feature의 결합 표현
-- Optimizer: Adam, learning rate 0.001, weight decay 0.0001
-- RMSE loss weight: 1.0
-- 클래스 경계 학습 손실 weight: 2.0
-- Early stopping patience: 13
-- AMP 및 gradient clipping 사용
+## 2. 2.3 Baseline 재현 조건을 뒷받침하는 결과
 
-주요 차이는 입력 크기와 정규화, pooling, spatial attention, 대조 손실 가중치 α와 β, 그리고 학습 가능한 경계의 초기화·스케일 설정이다.
+### 2.1 조건별 비교 가능성
 
-## 3. 실험별 설정
+| 조건 | 비교한 실행 | 주요 결과 | 근거 수준 |
+|---|---|---|---|
+| ImageNet 사전학습 | `nopretrained...samebatch` → `pretrained...samebatch` | Acc 15.05→72.40, MAE 1.6044→0.3469, Minor 0.00→28.77 | 이름 기반 추정 |
+| 입력 정규화 | `pretrained...samebatch` → `pretrained...samebatchimagenetnorm` | Acc 72.40→67.62, MAE 0.3469→0.3862, Minor 28.77→34.86 | 이름 기반 추정 |
+| 회귀 표본 구성 | `pretrained...diffbatch` ↔ `pretrained...samebatch` | 별도 표본: Acc 78.46·Minor 14.55, 공유 표본: Acc 72.40·Minor 28.77 | 이름 기반 추정 |
+| Dropout | `pretrained...samebatch` → `...samebatchdropoutadd` | Acc 72.40→67.59, MAE 0.3469→0.3873, Minor 28.77→35.08 | 이름 기반 추정 |
+| Loss weight | `...dropoutadd` → `...dropoutaddalphabeta0.5` | Acc 67.59→71.46, MAE 0.3873→0.3554, Minor 35.08→35.91 | 이름 기반 추정 |
+| Loss weight 추가 비교 | `new` → `newalphabeta0.1` | Acc 76.32→74.59, MAE 0.3207→0.3150, Minor 26.64→35.42 | 이름 기반 추정 |
+| Regression input | `pretrained...samebatch` → `projection_concat` | Acc 72.40→77.60, MAE 0.3469→0.3088, Minor 28.77→22.15 | 이름·Git 이력 기반 추정 |
+| SCOL 표본 가중 | `projection_concat` → `projection_concat_scolw` | Acc 77.60→75.95, MAE 0.3088→0.3110, Minor 22.15→38.48 | 이름·Git 이력 기반 추정 |
 
-| ID | 실험 디렉터리 | Fold | 입력/정규화 | Pooling | Spatial attention | α / β | 특징 |
-|---|---|---:|---|---|:---:|---:|---|
-| BL | `hybrid_eyepacs_efficientnet_v2_s_projection_concat_scolw_validation_10fold/fold_0` | 10 | 300 / 없음 | GeM 미적용 | X | 0.5 / 0.5 | MMNP와 학습 가능한 클래스 경계를 적용하지 않은 순수 baseline |
-| A1 | `hybrid_eyepacs_efficientnet_v2_s_384_avgpool_no_spatial` | 10 | 384 / ImageNet | Average | X | 0.1 / 0.1 | 384 해상도 pooling 기준선 |
-| A2 | `hybrid_eyepacs_efficientnet_v2_s_384_gem_no_spatial` | 10 | 384 / ImageNet | GeM | X | 0.1 / 0.1 | A1에서 pooling만 GeM으로 변경 |
-| A3 | `hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110` | 10 | 384 / ImageNet | GeM | X | 0.5 / 0.1 | 비균일 초기 경계 `[0.385, 0.451, 0.253, 0.330]` |
-| A4 | `hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2` | 10 | 384 / ImageNet | GeM | X | 1.0 / 0.5 | A3 대비 α·β 증가 |
-| A5 | `hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110_3` | 10 | 384 / ImageNet | GeM | X | 0.5 / 0.5 | A3 대비 β 증가 |
-| A6 | `hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384` | 10 | 384 / ImageNet | GeM | O | 0.1 / 0.1 | A2와 주요 설정이 같고 spatial attention 사용 |
-| CV1 | `hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384/fold_0` | 5 | 384 / ImageNet | GeM | O | 0.1 / 0.1 | 5-fold 실행 중 fold 0 결과만 존재 |
-| B1 | `hybrid_eyepacs_efficientnet_v2_s_scaled_baseline_plus_mmnp` | 10 | 300 / 없음 | 미기록 | 미기록 | 1.0 / 1.0 | sigmoid 계열 경계, 초기값 0.2 |
-| B2 | `hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp` | 10 | 300 / 없음 | 미기록 | 미기록 | 1.0 / 1.0 | softplus 및 제곱 순서 거리 |
-| B3 | `hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_regularized` | 10 | 300 / 없음 | 미기록 | 미기록 | 0.5 / 0.5 | ordinal scale 0.1, 별도 경계 손실 scale 0.25 |
-| B4 | `hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam` | 10 | 300 / 없음 | 미기록 | O | 0.5 / 0.5 | spatial attention 사용 |
-| B5 | `hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam_01` | 10 | 300 / 없음 | 미기록 | O | 0.1 / 0.1 | 결과 파일 없음 |
+사전학습을 사용하지 않은 실행은 모든 입력을 Class 2로 예측하여 Acc 15.05%, Macro 20.00%, MAE 1.6044를 기록했다. 반면 사전학습을 사용한 것으로 명명된 동일 표본 구성 실행은 Acc 72.40%, Macro 42.65%, MAE 0.3469였다. 설정 파일이 없어 두 실행의 다른 조건이 완전히 동일했는지는 검증할 수 없지만, 사전학습이 없는 조건에서 representation collapse가 발생했음을 보여주는 직접적인 결과다.
 
-`spatial`이라는 문자열이 포함된 A3–A5의 디렉터리명과 달리, 해당 `run_config.json`의 `model.spatial_attention`은 모두 `false`이다. 결과 해석에는 디렉터리명이 아니라 저장된 실행 설정을 기준으로 사용해야 한다.
+회귀 분기에 자연 분포 표본을 별도로 사용한 실행은 공유 표본 실행보다 전체 정확도가 6.06%p 높고 MAE가 0.0330 낮았다. 그러나 Minor는 14.55%로 공유 표본의 28.77%보다 14.22%p 낮았다. 이는 다수 클래스 중심의 전체 정확도와 소수 클래스 표현 사이의 trade-off를 보여준다.
 
-표의 `미기록`은 해당 옵션이 `run_config.json`에 저장되어 있지 않다는 뜻이며, 특정 기본값이 적용되었다고 임의로 간주하지 않았다.
+Dropout을 추가한 것으로 명명된 실행은 전체 정확도가 4.81%p 감소했지만 Minor는 6.31%p 증가했다. 여기에 α=β=0.5를 적용한 실행은 Acc가 3.87%p 회복되고 MAE도 0.0319 감소했다. 따라서 dropout의 효과를 전체 정확도만으로 판단하기보다 loss weight와 소수 클래스 정확도를 함께 보아야 한다.
 
-## 4. 검증 성능 비교
+Projection 표현을 연결한 실행은 전체 정확도와 MAE가 개선됐지만 Minor는 감소했다. 이후 SCOL 표본 가중을 적용한 실행은 전체 정확도가 1.65%p 낮아진 대신 Minor가 16.33%p 상승했다. 특히 Class 1은 9.84%에서 22.54%, Class 3은 34.09%에서 59.09%, Class 4는 22.54%에서 33.80%로 증가했다. 이는 전체 정확도보다 소수 클래스 표현을 개선하려는 본 연구의 baseline 선택 근거로 사용할 수 있다.
 
-Acc, Macro, C0–C4 및 Minor는 백분율이다. `Minor`는 연구에서 소수 클래스로 지정한 Class 1, 3, 4의 정확도 평균이다. CV1은 검증 표본 수와 분할 방식이 다른 5-fold 실행이므로 10-fold 결과와 직접적인 우열 비교에서 제외하는 것이 타당하다.
+### 2.2 수치로 분리할 수 없는 조건
 
-| ID | Best epoch | Acc | Macro | QWK | MAE | RMSE | C0 | C1 | C2 | C3 | C4 | Minor |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| A6 | 70 | 81.86 | 58.21 | — | 0.2271 | 0.5450 | 93.26 | 45.02 | 53.18 | 54.68 | 44.93 | 48.21 |
-| A3 | 52 | 81.63 | **59.12** | **0.8231** | **0.2258** | **0.5388** | 94.03 | 35.28 | 50.11 | **68.35** | **47.83** | **50.48** |
-| A2 | 59 | 81.45 | 57.52 | 0.8107 | 0.2331 | 0.5502 | 94.01 | 36.15 | 49.89 | 60.43 | 47.10 | 47.89 |
-| A5 | 64 | 81.44 | 58.63 | 0.8121 | 0.2321 | 0.5467 | 92.59 | 38.74 | **55.73** | 58.99 | 47.10 | 48.28 |
-| CV1 | 45 | 80.87 | 60.20 | — | 0.2327 | 0.5450 | 93.07 | 40.67 | 46.85 | 70.39 | 50.00 | 53.69 |
-| A1 | 53 | 79.59 | 54.37 | — | 0.2476 | 0.5618 | 92.94 | 36.15 | 43.95 | 61.15 | 37.68 | 44.99 |
-| A4 | 44 | 79.35 | 54.50 | 0.7945 | 0.2519 | 0.5664 | 90.74 | 36.80 | 54.03 | 48.92 | 42.03 | 42.58 |
-| BL | 24 | 75.35 | 41.98 | — | 0.3325 | 0.6832 | 90.35 | 13.20 | 45.01 | 36.69 | 24.64 | 24.84 |
-| B4 | 48 | 74.41 | 38.74 | — | 0.3397 | 0.6915 | 88.74 | 17.53 | 47.77 | 29.50 | 10.14 | 19.06 |
-| B2 | 39 | 74.11 | 43.14 | — | 0.3509 | 0.6992 | 88.39 | 14.94 | 44.59 | 43.88 | 23.91 | 27.58 |
-| B3 | 26 | 72.69 | 43.89 | — | 0.3506 | 0.6890 | 85.51 | 21.00 | 46.50 | 32.37 | 34.06 | 29.14 |
-| B1 | 39 | 71.54 | 41.16 | — | 0.3580 | 0.6922 | 84.62 | 25.76 | 42.78 | 33.81 | 18.84 | 26.14 |
-| B5 | — | — | — | — | — | — | — | — | — | — | — | — |
+다음 조건은 변경 이력은 확인되지만 현재 아카이브만으로 독립적인 효과를 산출할 수 없다.
 
-## 5. 주요 결과
+- Learning rate 0.0001과 0.001: 동일한 다른 조건을 가진 결과쌍이 없다.
+- Sum과 mean reduction: `mean`은 이름에 남아 있으나 대응되는 확정 `sum` 실행 설정이 없다.
+- Temperature 0.1과 1.0: `_01`이 무엇을 의미하는지 설정 파일 없이 확정할 수 없다.
+- L2 embedding/prototype normalization: 적용 전후를 식별할 수 있는 결과명이 없다.
+- Ordinal distance normalization: `normalized_margin`은 학습 가능한 margin 정규화 실험이므로 고정 순서 거리 정규화와 동일시할 수 없다.
+- FP32 head와 gradient clipping: 안정화 전 실행은 실패했거나 설정·지표가 남지 않았으며, `dropoutadd`와 `dropoutadd_fixedregressionhead`의 `metrics.json`은 모든 값이 동일하다.
 
-### 5.1 384 해상도 실험군
+따라서 위 항목은 학습 안정화 과정 또는 구현 이력으로 설명할 수 있지만, 현재 자료로 성능 향상 수치를 제시해서는 안 된다.
 
-A6가 81.86%로 가장 높은 전체 정확도를 보였다. 다만 QWK가 기록되지 않아 순서형 분류 성능까지 종합해 A3보다 우수하다고 단정할 수는 없다. A3는 전체 정확도 81.63%, Macro Accuracy 59.12%, QWK 0.8231, MAE 0.2258, RMSE 0.5388을 기록했다. QWK가 저장된 실행 중 가장 높고 MAE와 RMSE도 가장 낮으며, Class 3 정확도 68.35%와 Class 4 정확도 47.83%를 확보해 10-fold 설정의 소수 클래스 평균도 50.48%로 가장 높았다. 현재 저장된 지표를 종합하면 A3가 가장 균형적인 후보이다.
+### 2.3 최종 baseline 해석
 
-A2와 A1은 입력 크기, 정규화, attention, 손실 가중치가 같고 pooling만 다르므로 비교 조건이 가장 명확하다. Average Pooling을 GeM으로 바꾸었을 때 전체 정확도는 79.59%에서 81.45%로 1.86%p 증가했고, Macro Accuracy는 54.37%에서 57.52%로 3.15%p 증가했다. 특히 Class 2는 5.94%p, Class 4는 9.42%p 향상되었으며 MAE는 0.2476에서 0.2331로, RMSE는 0.5618에서 0.5502로 감소했다. 반면 Class 1은 동일하고 Class 3은 0.72%p 낮아졌다. 전체적으로는 GeM의 효과가 긍정적이지만 모든 소수 클래스가 동시에 개선된 것은 아니다.
+최종 baseline인 `projection_concat_scolw_validation`의 최적 검증 성능은 Acc 75.35%, MAE 0.3325, Macro 41.98%, Minor 24.84%이고, 테스트 성능은 Acc 75.78%, MAE 0.3196, Macro 42.22%, Minor 25.57%이다.
 
-A6와 A2는 spatial attention의 사용 여부를 제외한 주요 설정이 같다. Attention을 사용한 A6는 전체 정확도가 0.41%p, Macro Accuracy가 0.69%p 증가했고 Class 1이 8.87%p 개선되었다. 반면 Class 3은 5.76%p, Class 4는 2.17%p 감소했다. 따라서 spatial attention은 경증 클래스 구분에는 유리했지만 중증 클래스 전체의 일관된 개선으로 이어지지는 않았다.
+복구된 전체 결과를 보면 이 실행이 모든 초기 실험 중 가장 높은 검증 정확도를 기록한 것은 아니다. `pretrained...regressiondiffbatch`는 78.46%, `projection_concat`은 77.60%를 기록했다. 따라서 최종 baseline은 “검증 정확도가 절대적으로 가장 높은 실행”이 아니라, 원 논문의 hybrid 구조, projection 연결, SCOL 표본 가중 및 분리된 validation/test 평가가 모두 구현되고 테스트 결과까지 남아 있는 재현 기준으로 설명하는 것이 타당하다. 특히 `projection_concat_scolw`가 소수 클래스 평균 38.48%를 보였다는 결과는 SCOL 가중의 방향성을 뒷받침하지만, validation 분할이 달라진 최종 baseline과 수치를 직접 비교해서는 안 된다.
 
-A3–A5를 비교하면 α=0.5, β=0.1인 A3가 가장 낮은 RMSE와 MAE, 가장 높은 QWK 및 Class 3·4 성능을 보였다. β를 0.5로 증가한 A5는 Class 1과 Class 2가 각각 38.74%, 55.73%로 개선되었으나 Class 3은 58.99%로 감소했다. α=1.0, β=0.5인 A4는 전체 정확도와 소수 클래스 평균이 모두 낮아져, 이 범위에서는 대조 손실 가중치를 크게 설정하는 것이 유리하지 않았다.
+## 3. 단순 모델 Baseline
 
-### 5.2 300 해상도 초기 실험군
+| 실행 | Epoch | Acc | MAE | Macro | C0 | C1 | C2 | C3 | C4 | Minor |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `baseline_eyepacs_efficientnet_v2_s` | 18 | 79.34 | 0.2908 | 39.78 | 97.29 | 9.84 | 39.32 | 39.77 | 12.68 | 20.76 |
+| `baseline_eyepacs_resnet50` | 35 | 79.37 | 0.2945 | 42.77 | 97.44 | 9.43 | 36.11 | 51.14 | 19.72 | 26.76 |
 
-순수 baseline BL의 최적 검증 정확도는 75.35%, Macro Accuracy는 41.98%, 소수 클래스 평균은 24.84%였다. 전체 정확도에 비해 Class 1이 13.20%, Class 3이 36.69%, Class 4가 24.64%로 낮아 클래스 불균형의 영향이 명확하게 나타났다.
+두 단순 baseline은 약 79%의 전체 정확도를 보였지만 Class 0 정확도가 97% 이상인 반면 Class 1 정확도는 10% 미만이었다. 높은 전체 정확도가 소수 클래스 판별 성능을 보장하지 않는다는 점이 명확하다.
 
-B1–B4의 전체 정확도는 71.54–74.41%, 소수 클래스 평균은 19.06–29.14%였다. 이 가운데 baseline의 전체 정확도를 넘어선 실험은 없었다. 다만 B3는 Class 4가 baseline보다 9.42%p 높았고, B2는 Class 3이 7.19%p 높아 특정 소수 클래스의 개선 가능성을 보였다. 반대로 다른 클래스의 성능 저하가 함께 발생하여 전체 성능 향상으로 이어지지는 않았다.
+## 4. 초기 Hybrid 실행과 fold 결과
 
-384 해상도 실험군은 baseline과 B1–B4보다 전반적으로 높은 성능을 보였다. 그러나 입력 크기뿐 아니라 ImageNet 정규화, dropout, pooling, 손실 가중치와 경계 초기화 방식까지 함께 달라졌으므로, 이 차이를 특정 요소 하나의 효과로 해석할 수는 없다.
+상위 `hybrid_eyepacs_efficientnet_v2_s` 결과는 fold 0과 동일한 중복본이다.
 
-B2는 B1보다 전체 정확도와 Class 3·4 성능이 높아 softplus 기반의 제곱 순서 거리가 sigmoid 계열 기준선보다 일부 소수 클래스에 유리한 경향을 보였다. B3는 Class 4가 34.06%로 B1과 B2보다 높았지만 Class 3은 32.37%로 감소했다. B4는 전체 정확도는 74.41%로 해당 그룹에서 가장 높지만 Class 4가 10.14%에 그쳐, 높은 전체 정확도가 소수 클래스 성능을 보장하지 않는다는 점을 보여준다.
+| 실행 | Epoch | Acc | MAE | Macro | C0 | C1 | C2 | C3 | C4 | Minor |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `hybrid_eyepacs_efficientnet_v2_s` | 26 | 80.36 | 0.2755 | 37.14 | 96.67 | 11.48 | 52.55 | 25.00 | 0.00 | 12.16 |
+| `hybrid_eyepacs_efficientnet_v2_s/fold_0` | 26 | 80.36 | 0.2755 | 37.14 | 96.67 | 11.48 | 52.55 | 25.00 | 0.00 | 12.16 |
+| `hybrid_eyepacs_efficientnet_v2_s/fold_1` | 16 | 80.45 | 0.2846 | 36.21 | 97.25 | 6.94 | 53.12 | 12.50 | 11.27 | 10.24 |
+| `hybrid_eyepacs_efficientnet_v2_s/fold_2` | 22 | 80.18 | 0.2825 | 36.21 | 96.09 | 13.11 | 54.63 | 17.24 | 0.00 | 10.12 |
+| `hybrid_eyepacs_efficientnet_v2_s/fold_3` | 16 | 80.30 | 0.2850 | 35.86 | 97.13 | 5.33 | 52.74 | 18.39 | 5.71 | 9.81 |
+| `hybrid_eyepacs_efficientnet_v2_s/fold_4` | 19 | 78.67 | 0.2947 | 36.20 | 95.47 | 17.21 | 44.80 | 20.69 | 2.82 | 13.57 |
 
-### 5.3 5-fold 실행 상태
+다섯 fold의 평균±표준편차는 Acc 79.99±0.67%, MAE 0.2844±0.0062, Macro 36.33±0.43%, Minor 11.18±1.45%이다. Class 4 평균은 3.96%에 불과해 전체 정확도가 Class 0과 Class 2에 의해 지배되었다.
 
-5-fold 설정은 `hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384/fold_0`에서만 확인된다. Fold 0의 검증 성능은 전체 정확도 80.87%, Macro Accuracy 60.20%, Class 1·3·4 평균 53.69%이다. 그러나 fold 1–4의 결과와 전체 fold 집계 파일이 없으므로 현재 자료만으로 5-fold 교차검증의 평균과 표준편차를 산출할 수 없다. 상위 디렉터리의 `run_config.json`은 10-fold로 기록되어 있어 하위 fold 0 설정과도 일치하지 않는다.
+## 5. 설정 파일이 없는 초기 재현 실험 전체
 
-### 5.4 Baseline 테스트 결과
+아래 조건 설명은 디렉터리명과 Git 이력에 근거한 추정이다. 수치 자체는 각 `metrics.json`의 `best_val`에서 직접 읽었다.
 
-BL의 제공된 test 결과는 전체 정확도 75.78%, Macro Accuracy 42.22%, MAE 0.3196, RMSE 0.6597이었다. 클래스별 정확도는 Class 0부터 차례로 90.94%, 13.52%, 43.48%, 42.05%, 21.13%이며, Class 1·3·4 평균은 25.57%이다. 검증 결과와 마찬가지로 다수 클래스인 Class 0에는 높은 성능을 보이지만 Class 1과 Class 4의 판별 성능은 매우 낮다. 이는 이후 방법의 효과를 평가할 때 전체 정확도뿐 아니라 Macro Accuracy와 소수 클래스별 성능을 반드시 함께 비교해야 하는 근거가 된다.
+| 실행 | Epoch | Acc | MAE | Macro | C0 | C1 | C2 | C3 | C4 | Minor |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `lr0.001batch24ordianldisteuclidian` | 3 | 70.23 | 0.4169 | 28.31 | 91.40 | 11.48 | 10.59 | 23.86 | 4.23 | 13.19 |
+| `new` | 17 | 76.32 | 0.3207 | 43.01 | 91.63 | 11.89 | 43.48 | 51.14 | 16.90 | 26.64 |
+| `newalphabeta0.1` | 15 | 74.59 | 0.3150 | 47.20 | 88.54 | 18.44 | 41.21 | 56.82 | 30.99 | 35.42 |
+| `nopretrainedreductionmeanregressionsamebatch` | 6 | 15.05 | 1.6044 | 20.00 | 0.00 | 0.00 | 100.00 | 0.00 | 0.00 | 0.00 |
+| `pretrainedreductionmeanregressiondiffbatch` | 21 | 78.46 | 0.3139 | 35.74 | 97.25 | 5.33 | 37.81 | 34.09 | 4.23 | 14.55 |
+| `pretrainedreductionmeanregressionsamebatch` | 53 | 72.40 | 0.3469 | 42.65 | 85.75 | 25.41 | 41.21 | 39.77 | 21.13 | 28.77 |
+| `pretrained...samebatchdropoutadd` | 27 | 67.59 | 0.3873 | 44.79 | 78.08 | 36.48 | 40.64 | 36.36 | 32.39 | 35.08 |
+| `pretrained...dropoutaddalphabeta0.5` | 34 | 71.46 | 0.3554 | 47.00 | 82.84 | 30.74 | 44.42 | 43.18 | 33.80 | 35.91 |
+| `pretrained...dropoutadd_fixedregressionhead` | 27 | 67.59 | 0.3873 | 44.79 | 78.08 | 36.48 | 40.64 | 36.36 | 32.39 | 35.08 |
+| `pretrained...samebatchimagenetnorm` | 23 | 67.62 | 0.3862 | 44.58 | 78.43 | 34.43 | 39.89 | 36.36 | 33.80 | 34.86 |
+| `projection_concat` | 26 | 77.60 | 0.3088 | 41.48 | 93.11 | 9.84 | 47.83 | 34.09 | 22.54 | 22.15 |
+| `projection_concat_01` | 12 | 75.10 | 0.3221 | 47.04 | 89.74 | 19.26 | 38.75 | 46.59 | 40.85 | 35.57 |
+| `projection_concat_nested_cv` | 17 | 77.12 | 0.3262 | 39.27 | 92.87 | 8.23 | 49.15 | 35.97 | 10.14 | 18.11 |
+| `projection_concat_scolw` | 11 | 75.95 | 0.3110 | 47.59 | 92.06 | 22.54 | 30.43 | 59.09 | 33.80 | 38.48 |
+| `projection_concat_scolw_validation` | 24 | 75.35 | 0.3325 | 41.98 | 90.35 | 13.20 | 45.01 | 36.69 | 24.64 | 24.84 |
 
-다른 실험에는 대응되는 test 결과가 없으므로, BL의 test 성능과 나머지 실험의 validation 성능을 직접 비교해서는 안 된다.
+`dropoutadd`와 `dropoutadd_fixedregressionhead`는 epoch, 손실 및 클래스별 지표까지 모두 동일하다. 별도의 재실행 결과라기보다 같은 `metrics.json`이 복제되었을 가능성이 높으므로 FP32/fixed head의 효과를 나타내는 비교로 사용하지 않는다.
 
-## 6. 학습된 클래스 경계
+## 6. 최종 baseline의 저장된 fold 결과
 
-아래 값은 `best_metrics.json`의 Class 0–1, 1–2, 2–3, 3–4 경계값 순서이다.
+`projection_concat_scolw_validation_10fold`에는 fold 0–5만 존재한다. fold 0은 상위 `projection_concat_scolw_validation`과 동일한 중복 결과이며, fold 6–9는 아카이브에 없다.
+
+| Fold | Epoch | Val Acc | Val MAE | Macro | C0 | C1 | C2 | C3 | C4 | Minor |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 24 | 75.35 | 0.3325 | 41.98 | 90.35 | 13.20 | 45.01 | 36.69 | 24.64 | 24.84 |
+| 1 | 14 | 75.60 | 0.3370 | 40.90 | 90.75 | 14.35 | 44.32 | 31.39 | 23.70 | 23.15 |
+| 2 | 21 | 73.88 | 0.3439 | 42.90 | 88.18 | 20.38 | 39.77 | 43.21 | 22.95 | 28.85 |
+| 3 | 14 | 75.74 | 0.3158 | 45.38 | 89.96 | 16.93 | 43.70 | 46.04 | 30.25 | 31.08 |
+| 4 | 16 | 74.65 | 0.3370 | 42.55 | 89.69 | 17.34 | 40.85 | 40.49 | 24.35 | 27.39 |
+| 5 | 11 | 75.52 | 0.3430 | 40.19 | 93.86 | 12.82 | 27.54 | 43.62 | 23.08 | 26.51 |
+
+저장된 여섯 fold의 검증 평균±표준편차는 Acc 75.12±0.66%, MAE 0.3349±0.0094, Macro 42.31±1.65%, Minor 26.97±2.58%이다. 테스트 결과가 존재하는 fold 0–4의 평균±표준편차는 Acc 75.10±0.58%, MAE 0.3306±0.0082, Macro 41.98±1.04%, Minor 25.67±1.84%이다. 전체 fold가 완료되지 않았으므로 이를 완전한 교차검증 결과로 보고해서는 안 된다.
+
+## 7. 설정이 확인되는 제안 모델 실험
+
+### 7.1 설정
+
+| ID | 실행 | 입력/정규화 | Pooling | Spatial | α/β | 핵심 조건 |
+|---|---|---|---|:---:|---:|---|
+| A1 | `384_avgpool_no_spatial` | 384/ImageNet | Average | X | 0.1/0.1 | 384 입력 pooling 기준 |
+| A2 | `384_gem_no_spatial` | 384/ImageNet | GeM | X | 0.1/0.1 | A1에서 pooling만 변경 |
+| A3 | `384_gem_spatial_cloc110` | 384/ImageNet | GeM | X | 0.5/0.1 | 비균일 초기 경계 |
+| A4 | `384_gem_spatial_cloc110-2` | 384/ImageNet | GeM | X | 1.0/0.5 | A3에서 α·β 변경 |
+| A5 | `384_gem_spatial_cloc110_3` | 384/ImageNet | GeM | X | 0.5/0.5 | A3에서 β만 변경 |
+| A6 | `e1_e2_gem384` | 384/ImageNet | GeM | O | 0.1/0.1 | A2에서 spatial attention만 변경 |
+| CV1 | `e1_e2_gem384/fold_0` | 384/ImageNet | GeM | O | 0.1/0.1 | 별도 fold 실행 |
+| B1 | `scaled_baseline_plus_mmnp` | 300/[0,1] | 미기록 | 미기록 | 1.0/1.0 | sigmoid 계열 경계 |
+| B2 | `softplus_squared_mmnp` | 300/[0,1] | 미기록 | 미기록 | 1.0/1.0 | softplus·제곱 거리 |
+| B3 | `softplus_squared_mmnp_regularized` | 300/[0,1] | 미기록 | 미기록 | 0.5/0.5 | margin 정규화 강화 |
+| B4 | `softplus_squared_mmnp_spatial_cbam` | 300/[0,1] | 미기록 | O | 0.5/0.5 | spatial attention 추가 |
+
+디렉터리명에 `spatial`이 포함된 A3–A5와 달리 실제 `run_config.json`의 `spatial_attention`은 `false`이다. 표는 디렉터리명이 아니라 저장된 설정을 기준으로 작성했다.
+
+### 7.2 최적 검증 결과
+
+| ID | Epoch | Acc | MAE | Macro | C0 | C1 | C2 | C3 | C4 | Minor |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A1 | 53 | 79.59 | 0.2476 | 54.37 | 92.94 | 36.15 | 43.95 | 61.15 | 37.68 | 44.99 |
+| A2 | 59 | 81.45 | 0.2331 | 57.52 | 94.01 | 36.15 | 49.89 | 60.43 | 47.10 | 47.89 |
+| A3 | 52 | 81.63 | 0.2258 | 59.12 | 94.03 | 35.28 | 50.11 | 68.35 | 47.83 | 50.48 |
+| A4 | 44 | 79.35 | 0.2519 | 54.50 | 90.74 | 36.80 | 54.03 | 48.92 | 42.03 | 42.58 |
+| A5 | 64 | 81.44 | 0.2321 | 58.63 | 92.59 | 38.74 | 55.73 | 58.99 | 47.10 | 48.28 |
+| A6 | 70 | 81.86 | 0.2271 | 58.21 | 93.26 | 45.02 | 53.18 | 54.68 | 44.93 | 48.21 |
+| CV1 | 45 | 80.87 | 0.2327 | 60.20 | 93.07 | 40.67 | 46.85 | 70.39 | 50.00 | 53.69 |
+| B1 | 39 | 71.54 | 0.3580 | 41.16 | 84.62 | 25.76 | 42.78 | 33.81 | 18.84 | 26.14 |
+| B2 | 39 | 74.11 | 0.3509 | 43.14 | 88.39 | 14.94 | 44.59 | 43.88 | 23.91 | 27.58 |
+| B3 | 26 | 72.69 | 0.3506 | 43.89 | 85.51 | 21.00 | 46.50 | 32.37 | 34.06 | 29.14 |
+| B4 | 48 | 74.41 | 0.3397 | 38.74 | 88.74 | 17.53 | 47.77 | 29.50 | 10.14 | 19.06 |
+
+### 7.3 통제 비교 결과
+
+A1과 A2는 pooling만 다르다. Average Pooling을 GeM으로 변경했을 때 검증 Acc는 79.59%에서 81.45%로 1.86%p, Macro는 54.37%에서 57.52%로 3.15%p, Minor는 44.99%에서 47.89%로 2.90%p 상승했다. 테스트에서도 Acc가 79.45%에서 82.10%로 2.65%p, Minor가 44.92%에서 53.32%로 8.40%p 증가해 GeM의 효과가 가장 일관되게 확인되었다.
+
+A2와 A6는 spatial attention 여부만 다르다. Attention을 추가하면 검증 Acc는 0.41%p, Class 1은 8.87%p 증가했지만 Class 3과 Class 4는 각각 5.76%p와 2.17%p 감소했다. 테스트에서는 Acc가 82.10%에서 81.73%로 0.37%p, Minor가 53.32%에서 50.88%로 2.44%p 감소했다. 따라서 spatial attention은 Class 1과 Class 2에는 유리했지만 전체 및 중증 클래스에 일관된 개선을 주지는 않았다.
+
+A3–A5는 α와 β만 다르다. 테스트 Acc는 α=0.5, β=0.1인 A3가 82.19%로 가장 높았고, α=0.5, β=0.5인 A5가 81.82%, α=1.0, β=0.5인 A4가 80.08%였다. 대조 손실 가중치를 크게 설정할수록 성능이 좋아지는 단순한 관계는 나타나지 않았으며, A3가 Class 3에서 80.68%를 기록해 가장 강한 결과를 보였다.
+
+## 8. 학습된 클래스 경계
+
+아래 값은 설정 파일이 존재하는 실행의 `best_margins`에서 읽은 Class 0–1, 1–2, 2–3, 3–4 경계값이다.
 
 | ID | 0–1 | 1–2 | 2–3 | 3–4 | 정지 조건 |
 |---|---:|---:|---:|---:|---|
@@ -121,18 +182,55 @@ BL의 제공된 test 결과는 전체 정확도 75.78%, Macro Accuracy 42.22%, M
 | B3 | 0.8378 | 0.8723 | 0.5994 | 0.5073 | 수렴 판정 |
 | B4 | 0.7451 | 0.4422 | 0.4813 | 0.6026 | 수렴 판정 |
 
-학습된 네 경계는 대부분 동일한 값으로 수렴하지 않았다. 이는 인접 등급 간 관계를 일률적인 간격으로 고정하기보다 데이터에서 서로 다른 경계 구조를 학습할 수 있음을 보여준다. 다만 경계값의 절대 크기는 parameterization, 초기화와 정규화 방식에 따라 달라지므로 서로 다른 실험 설정 사이에서 직접 비교하기보다 동일 설정 안에서의 상대적 패턴을 해석해야 한다.
+동일한 parameterization 안에서도 네 경계는 같은 값으로 수렴하지 않았다. 이는 모든 인접 등급 차이를 동일하게 고정하지 않고 데이터에 따라 다른 관계를 학습할 수 있음을 보여준다. 다만 parameterization, 초기화 및 정규화가 다른 실행 사이에서는 경계의 절대값을 직접 비교하지 않는다.
 
-## 7. 결론 및 후속 확인 사항
+## 9. 기타 방법 개발 실험
 
-순수 baseline BL은 검증 정확도 75.35%와 테스트 정확도 75.78%를 보였지만 Class 1과 Class 4 성능이 낮아 다수 클래스 편향이 뚜렷했다. 현재 검증 결과에서는 384×384 입력, ImageNet 정규화 및 GeM pooling 조합이 baseline과 300 해상도 초기 실험군보다 안정적인 성능을 보인다. 전체 정확도만 보면 A6가 가장 높지만, 저장된 순서형 지표와 소수 클래스 성능을 함께 고려하면 A3가 가장 균형적인 10-fold 후보이다. 특히 Class 3과 Class 4 개선에 강점이 있다. 반면 Class 1은 A6가 가장 높아, 소수 클래스별 목표에 따라 최적 설정이 달라질 수 있다.
+| 실행 | Epoch | Acc | MAE | Macro | C0 | C1 | C2 | C3 | C4 | Minor |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `agsoft` | 29 | 74.86 | 0.3368 | 41.05 | 89.47 | 15.80 | 45.86 | 31.65 | 22.46 | 23.31 |
+| `baseline_plus_mmnp` | 23 | 75.05 | 0.3368 | 41.03 | 91.58 | 14.94 | 35.88 | 41.01 | 21.74 | 25.89 |
+| `independent_margin` | 19 | 75.65 | 0.3273 | 43.14 | 89.98 | 16.67 | 47.03 | 38.85 | 23.19 | 26.23 |
+| `learnable_dist` | 20 | 74.97 | 0.3340 | 41.99 | 90.82 | 17.10 | 37.79 | 35.25 | 28.99 | 27.11 |
+| `normalized_margin` | 14 | 74.92 | 0.3444 | 42.02 | 92.35 | 10.39 | 31.53 | 38.13 | 37.68 | 28.73 |
+| `underprediction_1.5` | 17 | 74.45 | 0.3501 | 38.22 | 90.37 | 12.55 | 41.30 | 33.09 | 13.77 | 19.81 |
 
-최종 결론을 내리기 전에 다음 자료가 추가로 필요하다.
+이 초기 방법 개발군에서는 `independent_margin`이 가장 높은 검증 Acc 75.65%를, `normalized_margin`이 가장 높은 Minor 28.73%를 기록했다. 그러나 설정 파일이 없어 방법명 이외의 조건 차이를 통제할 수 없으므로 경향 확인용으로만 사용한다.
 
-- BL을 제외한 모든 실험의 `evaluation_metrics.json`
-- 5-fold 실험의 fold 1–4 결과
-- 5개 fold의 평균과 표준편차를 담은 집계 결과
-- QWK가 누락된 실행의 재평가 결과
-- 설정만 존재하는 B5의 완료 여부 확인
+## 10. 저장된 테스트 결과 전체
 
-이 자료가 확보되면 검증 성능이 아니라 외부 테스트 성능을 기준으로 모델을 선정하고, fold 간 변동성까지 포함한 신뢰도 높은 비교가 가능하다.
+아래 표는 `metrics.json` 안에 `test`가 존재하는 모든 파일을 포함한다. 상위 `projection_concat_scolw_validation`과 fold 0은 동일한 중복 결과다.
+
+| 실행 | Test Acc | MAE | Macro | C0 | C1 | C2 | C3 | C4 | Minor |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `384_avgpool_no_spatial` | 79.45 | 0.2533 | 53.89 | 93.30 | 32.79 | 41.40 | 68.18 | 33.80 | 44.92 |
+| `384_gem_no_spatial` | 82.10 | 0.2231 | 60.89 | 94.04 | 36.48 | 50.47 | 78.41 | 45.07 | 53.32 |
+| `384_gem_spatial_cloc110` | 82.19 | 0.2240 | 60.36 | 94.62 | 35.66 | 48.58 | 80.68 | 42.25 | 52.86 |
+| `384_gem_spatial_cloc110-2` | 80.08 | 0.2385 | 56.59 | 91.29 | 37.30 | 53.50 | 67.05 | 33.80 | 46.05 |
+| `384_gem_spatial_cloc110_3` | 81.82 | 0.2262 | 59.64 | 93.42 | 34.43 | 53.69 | 71.59 | 45.07 | 50.36 |
+| `agsoft` | 75.38 | 0.3290 | 42.81 | 89.47 | 18.03 | 46.50 | 37.50 | 22.54 | 26.02 |
+| `baseline_plus_mmnp` | 75.47 | 0.3332 | 43.31 | 91.75 | 11.48 | 35.92 | 59.09 | 18.31 | 29.63 |
+| `e1_e2_gem384` | 81.73 | 0.2262 | 59.97 | 92.76 | 39.34 | 54.44 | 73.86 | 39.44 | 50.88 |
+| `learnable_dist` | 75.67 | 0.3253 | 44.30 | 91.60 | 13.52 | 37.05 | 51.14 | 28.17 | 30.94 |
+| `normalized_margin` | 76.10 | 0.3318 | 44.65 | 92.99 | 14.75 | 32.33 | 40.91 | 42.25 | 32.64 |
+| `projection_concat_nested_cv` | 78.60 | 0.3014 | 44.53 | 94.04 | 8.20 | 48.20 | 45.45 | 26.76 | 26.80 |
+| `projection_concat_scolw_validation` | 75.78 | 0.3196 | 42.22 | 90.94 | 13.52 | 43.48 | 42.05 | 21.13 | 25.57 |
+| `projection_concat_scolw_validation_10fold/fold_0` | 75.78 | 0.3196 | 42.22 | 90.94 | 13.52 | 43.48 | 42.05 | 21.13 | 25.57 |
+| `projection_concat_scolw_validation_10fold/fold_1` | 75.27 | 0.3378 | 40.75 | 90.20 | 12.65 | 45.37 | 38.64 | 16.90 | 22.73 |
+| `projection_concat_scolw_validation_10fold/fold_2` | 74.06 | 0.3403 | 42.05 | 88.38 | 17.62 | 42.91 | 40.23 | 21.13 | 26.33 |
+| `projection_concat_scolw_validation_10fold/fold_3` | 75.37 | 0.3223 | 43.73 | 90.01 | 15.98 | 43.29 | 37.93 | 31.43 | 28.45 |
+| `projection_concat_scolw_validation_10fold/fold_4` | 75.00 | 0.3329 | 41.12 | 90.43 | 18.85 | 39.32 | 34.48 | 22.54 | 25.29 |
+| `scaled_baseline_plus_mmnp` | 72.85 | 0.3458 | 46.80 | 85.86 | 24.18 | 40.64 | 57.95 | 25.35 | 35.83 |
+| `softplus_squared_mmnp` | 75.58 | 0.3253 | 44.55 | 90.28 | 11.48 | 44.23 | 50.00 | 26.76 | 29.41 |
+| `softplus_squared_mmnp_regularized` | 73.53 | 0.3332 | 46.29 | 86.48 | 23.77 | 43.29 | 51.14 | 26.76 | 33.89 |
+| `softplus_squared_mmnp_spatial_cbam` | 75.04 | 0.3224 | 43.21 | 88.57 | 18.85 | 48.02 | 40.91 | 19.72 | 26.49 |
+| `underprediction_1.5` | 75.41 | 0.3392 | 43.68 | 90.90 | 12.70 | 39.70 | 51.14 | 23.94 | 29.26 |
+
+## 11. 결론과 문서 반영 시 주의점
+
+- 모든 `metrics.json`을 포함하면 사전학습, 회귀 표본 구성, dropout, loss weight, regression input 및 SCOL 가중에 대한 수치 근거를 일부 확보할 수 있다.
+- 설정 파일이 없는 초기 실행은 디렉터리명 기반 추정이므로 “해당 조건만 바꾸었다”고 단정하지 않는다.
+- 현재 가장 명확한 단일 변수 결과는 `run_config.json`이 있는 Average↔GeM, spatial attention off↔on, 그리고 A3–A5의 loss weight 비교다.
+- 최종 baseline은 전체 검증 정확도 최댓값이 아니라, 목표 hybrid 구조와 평가 절차가 완성되고 테스트 지표가 남아 있는 재현 기준이다.
+- 전체 정확도만 보면 단순 baseline과 일부 초기 hybrid가 높지만, Class 1·3·4 성능은 매우 낮다. 본 연구의 개선 여부는 Macro와 Minor를 함께 비교해야 한다.
+- 최종 baseline의 전체 fold 결과와 설정 없는 초기 실험의 `run_config.json`이 추가되면 더 강한 통계적 결론을 낼 수 있다.
