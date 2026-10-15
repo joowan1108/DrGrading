@@ -133,7 +133,7 @@ def test_mmnp_scol_uses_hinge_and_reports_active_violations() -> None:
     loss = scol(embeddings, labels, learnable_margins=margins)
     loss.backward()
 
-    torch.testing.assert_close(loss.detach(), torch.tensor(0.5))
+    torch.testing.assert_close(loss.detach(), torch.tensor(1.0))
     assert scol.last_active_violation_rate == 1.0
     assert scol.last_boundary_stats is not None
     torch.testing.assert_close(
@@ -150,6 +150,50 @@ def test_mmnp_scol_uses_hinge_and_reports_active_violations() -> None:
     )
     assert margins.raw_margins.grad is not None
     assert margins.raw_margins.grad.item() > 0
+
+
+def test_mmnp_matches_cloc_pair_sum_and_gradients() -> None:
+    torch.manual_seed(23)
+    labels = torch.tensor([0, 0, 1, 1, 1, 3, 3])
+    embeddings = torch.randn(7, 4, requires_grad=True)
+    margins = CumulativeOrdinalMargins(
+        num_classes=4, initial_margin_values=[0.2, 0.4, 0.8]
+    )
+    values = margins.margin_values().detach().requires_grad_()
+    normalized = torch.nn.functional.normalize(embeddings, dim=1)
+    similarities = normalized @ normalized.T
+    expected = embeddings.sum() * 0.0
+    for anchor, rank in enumerate(labels.tolist()):
+        for positive, positive_rank in enumerate(labels.tolist()):
+            if positive == anchor or positive_rank != rank:
+                continue
+            for negative, negative_rank in enumerate(labels.tolist()):
+                if negative_rank == rank:
+                    continue
+                low, high = sorted((rank, negative_rank))
+                expected = expected + torch.relu(
+                    values[low:high].sum()
+                    + similarities[anchor, negative]
+                    - similarities[anchor, positive]
+                )
+    for reduction in ("mean", "sum"):
+        criterion = WeightedSupervisedContrastiveOrdinalLoss(
+            num_classes=4, objective="mmnp", reduction=reduction
+        )
+        actual = criterion(embeddings, labels, learnable_margins=margins)
+        reference = expected / len(labels) if reduction == "mean" else expected
+        torch.testing.assert_close(actual, reference)
+        actual_grads = torch.autograd.grad(
+            actual, (embeddings, margins.raw_margins), retain_graph=True
+        )
+        expected_grads = torch.autograd.grad(
+            reference, (embeddings, values), retain_graph=True
+        )
+        torch.testing.assert_close(actual_grads[0], expected_grads[0])
+        torch.testing.assert_close(
+            actual_grads[1],
+            expected_grads[1] * torch.sigmoid(margins.raw_margins.detach()),
+        )
 
 
 def test_mmnp_scol_ignores_pairs_that_satisfy_the_margin() -> None:
@@ -202,7 +246,7 @@ def test_mmnp_counts_distant_pairs_at_every_crossed_boundary() -> None:
 
     loss = scol(embeddings, labels, learnable_margins=margins)
 
-    torch.testing.assert_close(loss.detach(), torch.tensor(0.4))
+    torch.testing.assert_close(loss.detach(), torch.tensor(0.8))
     assert scol.last_boundary_stats is not None
     torch.testing.assert_close(
         scol.last_boundary_stats["comparisons"],

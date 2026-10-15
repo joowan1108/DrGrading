@@ -66,3 +66,34 @@ def make_eval_transform(image_size: int = 300, normalize: str = "none") -> T.Com
             *normalization_transform(normalize),
         ]
     )
+
+
+def make_idrid_transform(*, training: bool, normalize: str = "imagenet", augmentation: dict | None = None) -> T.Compose:
+    """CLOC's IDRiD augmentation types at 224x224; strengths are explicit choices."""
+    options = augmentation or {}
+    operations = [T.Resize((224, 224), interpolation=T.InterpolationMode.BILINEAR)]
+    if training:
+        operations += [
+            T.RandomHorizontalFlip(p=float(options.get("horizontal_flip_p", 0.5))),
+            T.RandomVerticalFlip(p=float(options.get("vertical_flip_p", 0.5))),
+            T.RandomRotation(
+                degrees=float(options.get("rotation_degrees", 30)),
+                interpolation=T.InterpolationMode.BILINEAR,
+                fill=0,
+            ),
+            T.RandomApply([
+                T.GaussianBlur(
+                    kernel_size=int(options.get("blur_kernel_size", 5)),
+                    sigma=tuple(options.get("blur_sigma", [0.1, 2.0])),
+                )
+            ], p=float(options.get("blur_p", 0.5))),
+            T.RandomApply([
+                T.ColorJitter(
+                    brightness=float(options.get("brightness", 0.2)),
+                    contrast=float(options.get("contrast", 0.2)),
+                    saturation=float(options.get("saturation", 0.2)),
+                    hue=float(options.get("hue", 0.05)),
+                )
+            ], p=float(options.get("color_jitter_p", 0.5))),
+        ]
+    return T.Compose([*operations, T.ToTensor(), *normalization_transform(normalize)])

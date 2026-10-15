@@ -333,7 +333,8 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
                     - positive_similarities.unsqueeze(1)
                 )
                 hinge_losses = F.relu(violations)
-                anchor_losses.append(hinge_losses.mean())
+                # CLOC Eq. (2): sum over positive-negative pairs for each anchor.
+                anchor_losses.append(hinge_losses.sum())
                 active_violations = active_violations + (violations > 0).sum()
                 total_violations += violations.numel()
                 negative_labels = labels[negative_indices]
