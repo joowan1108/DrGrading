@@ -213,7 +213,15 @@ def test_full_pipeline_select_refit_freeze_reload_and_metrics(tmp_path, monkeypa
     else:
         payload = train_idrid.run(cfg, allow_synthetic=True)
     results = tmp_path / "results"
+    saved_config = json.loads((results / "run_config.json").read_text())["config"]
+    assert saved_config["loss"]["alpha"] == 0.1
+    assert saved_config["loss"]["beta"] == 0.1
     records = json.loads((results / "metrics_history.json").read_text())["epochs"]
+    selection_records = json.loads((results / "selection_history.json").read_text())["epochs"]
+    for record in selection_records + records:
+        losses = record["train"]
+        expected_total = 0.1 * losses["pcol"] + 0.1 * losses["scol"] + losses["rmse"] + 2.0 * losses["mmnp"]
+        assert losses["total"] == pytest.approx(expected_total, rel=1e-5)
     assert records[0]["margins"]["frozen"] is False
     assert records[1]["margins"]["frozen"] is True
     assert records[0]["margins"]["values"] == records[1]["margins"]["values"]

@@ -140,6 +140,18 @@ def margins_record(margins):
     }
 
 
+def loss_breakdown(metrics, cfg):
+    """Display each raw loss and its weighted contribution to the total."""
+    weights = {
+        "pcol": cfg["loss"]["alpha"], "scol": cfg["loss"]["beta"],
+        "rmse": cfg["loss"]["rmse_weight"], "mmnp": cfg["loss"]["mmnp_weight"],
+    }
+    parts = [f"loss={metrics['total']:.4f}"]
+    for name, weight in weights.items():
+        parts.append(f"{name}={metrics[name]:.4f}(weighted={float(weight) * metrics[name]:.4f})")
+    return " ".join(parts)
+
+
 def selection_indices(frame, *, val_size, seed):
     """Keep exact image copies together when choosing the train-only epoch plan."""
     if not frame["sha256"].duplicated().any():
@@ -229,7 +241,10 @@ def select_plan(frame, manifest, cfg, output, device):
             else:
                 bad_epochs += 1
         scheduler.step(float(val_metrics["mae"]))
-        print(f"selection epoch={epoch} phase={phase} val_accuracy={val_metrics['accuracy']:.4f} val_mae={val_metrics['mae']:.4f}")
+        print(
+            f"selection epoch={epoch} phase={phase} {loss_breakdown(train_metrics, cfg)} "
+            f"val_accuracy={val_metrics['accuracy']:.4f} val_mae={val_metrics['mae']:.4f}"
+        )
         save_json(output / "selection_history.json", {"epochs": history})
         if phase == "phase1_joint":
             options = cfg["loss"]
@@ -275,7 +290,10 @@ def refit(frame, manifest, cfg, output, device, plan):
         )
         history.append({**step, "train": train_metrics, "margins": margins_record(margins)})
         save_json(output / "metrics_history.json", {"epochs": history})
-        print(f"refit epoch={step['epoch']} phase={step['phase']} train_accuracy={train_metrics['accuracy']:.4f}")
+        print(
+            f"refit epoch={step['epoch']} phase={step['phase']} "
+            f"{loss_breakdown(train_metrics, cfg)} train_accuracy={train_metrics['accuracy']:.4f}"
+        )
     save_checkpoint(output / "best.pt", {
         "model": model.state_dict(), "epoch": plan["best_epoch"], "config": cfg,
         "margins": margins.state_dict() if margins is not None else None,
@@ -351,6 +369,10 @@ def run(cfg, *, allow_synthetic=False):
         raise FileExistsError(f"Output directory is not empty; choose a new --output-dir: {output}")
     frames, manifest = load_prepared(Path(cfg["data"]["data_dir"]), allow_synthetic=allow_synthetic)
     device = resolve_device(cfg["device"])
+    print(
+        f"Loss weights: PCOL={cfg['loss']['alpha']} SCOLw={cfg['loss']['beta']} "
+        f"RMSE={cfg['loss']['rmse_weight']} MMNP={cfg['loss']['mmnp_weight']}"
+    )
     output.mkdir(parents=True, exist_ok=True)
     git_rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
     save_json(output / "run_config.json", {

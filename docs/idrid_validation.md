@@ -26,6 +26,11 @@ color jitter 확률 0.5(brightness/contrast/saturation 0.2, hue 0.05)를 기본�
 평가에는 resize, tensor 변환, ImageNet 정규화만 적용한다.
 EyePACS의 검은 테두리 crop은 이 프로토콜에 추가하지 않았다.
 
+PCOL과 SCOLw 가중치는 이전 실험에 맞춰 각각 `alpha: 0.1`, `beta: 0.1`을 사용한다.
+총손실은 `0.1 * PCOL + 0.1 * SCOLw + 1.0 * RMSE + 2.0 * MMNP`이다.
+실행 시작 시 가중치를 출력하며, 매 epoch가 끝나면 각 손실의 원래 값과 가중치를
+곱한 기여도를 함께 출력한다. 실제 실행 값은 `run_config.json`에도 저장한다.
+
 ## 원격 컴퓨터에서 실행
 
 원격 GPU 컴퓨터의 프로젝트 디렉터리에서 실행한다. 이 명령은 명령을 실행한
@@ -134,7 +139,12 @@ git merge --ff-only origin/learnable_dist
 
 ## 저장 결과
 
-기본 결과 디렉터리: `checkpoints/hybrid_idrid_efficientnet_v2_s/`
+기본 결과 디렉터리: `checkpoints/hybrid_idrid_efficientnet_v2_s_a01_b01/`
+
+이전 `alpha=beta=1.0` 실행 결과와 구분하기 위해 기본 경로를 변경했다.
+이미 실행 중인 프로세스는 시작할 때 읽은 설정으로 계속 학습하므로,
+새 가중치를 적용하려면 기존 실행을 종료하고 새 프로세스로 시작한다.
+기존 체크포인트를 자동으로 이어서 학습하지 않는다.
 
 - `evaluation_metrics.json`: 전체 테스트 및 학습 중복 제외 부분집합의 지표, 중복 정보.
 - `predictions.csv`: 각 영상의 정답, 회귀 출력, 예측 등급, 절대오차, `overlaps_train` 표시.
