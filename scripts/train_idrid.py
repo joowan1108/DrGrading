@@ -5,14 +5,16 @@ import argparse
 import csv
 import json
 import platform
+import shlex
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
@@ -20,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from eyepacs_hybrid_ordinal.data import ClassStratifiedBatchSampler, EyePACSDataset
-from eyepacs_hybrid_ordinal.idrid import OFFICIAL_COUNTS
+from eyepacs_hybrid_ordinal.idrid import OFFICIAL_COUNTS, audit_duplicates, digest
 from eyepacs_hybrid_ordinal.losses import PrototypeContrastiveOrdinalLoss, WeightedSupervisedContrastiveOrdinalLoss
 from eyepacs_hybrid_ordinal.metrics import aggregate_predictions
 from eyepacs_hybrid_ordinal.models import HybridOrdinalNet
@@ -31,12 +33,25 @@ from train_hybrid_ordinal import build_learnable_margins, build_scheduler, evalu
 
 def load_prepared(data_dir: Path, *, allow_synthetic: bool = False):
     prepared = data_dir / "prepared"
-    manifest = json.loads((prepared / "manifest.json").read_text(encoding="utf-8"))
+    manifest_path = prepared / "manifest.json"
+    if not manifest_path.is_file():
+        command = shlex.join(["python", "scripts/prepare_idrid.py", "--data-dir", str(data_dir)])
+        raise FileNotFoundError(
+            f"IDRiD preparation has not completed: {manifest_path} is missing. "
+            f"Run `{command}` successfully before training. If preparation reports duplicates, "
+            f"inspect {prepared / 'duplicate_audit.json'}; --overlap-policy report preserves "
+            "the supplied split with disclosed overlap and separate non-overlap test metrics."
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not manifest["official_split_verified"] and not allow_synthetic:
         raise ValueError("An official 413/103 split is required. Run scripts/prepare_idrid.py first.")
     frames = {}
     for split in ("train", "test"):
-        frame = pd.read_csv(prepared / f"{split}.csv")
+        csv_path = prepared / f"{split}.csv"
+        expected_hash = manifest.get("prepared_csv_sha256", {}).get(split)
+        if expected_hash is not None and digest(csv_path) != expected_hash:
+            raise ValueError(f"Prepared {split}.csv has changed; rerun scripts/prepare_idrid.py.")
+        frame = pd.read_csv(csv_path)
         labels = pd.to_numeric(frame["level"], errors="raise")
         if not labels.isin(range(5)).all():
             raise ValueError(f"Invalid labels in {split}.csv")
@@ -48,9 +63,21 @@ def load_prepared(data_dir: Path, *, allow_synthetic: bool = False):
         frame["_image_id"] = frame["image"]
         frame["_label"] = labels.astype(int)
         frames[split] = frame
-    for column in ("image", "sample_id", "sha256"):
+    for column in ("image", "sample_id"):
         if set(frames["train"][column]) & set(frames["test"][column]):
             raise ValueError(f"Train/test overlap in {column}.")
+    audit = audit_duplicates({split: frame.to_dict("records") for split, frame in frames.items()})
+    overlap_count = audit["summary"]["overlapping_test_samples"]
+    if overlap_count:
+        if manifest.get("overlap_policy", "error") != "report":
+            raise ValueError("Train/test image-content overlap; rerun prepare_idrid.py --overlap-policy report to disclose and preserve it.")
+        warnings.warn(
+            f"{overlap_count} test images also occur in training. Full-test metrics include "
+            "these duplicates; train-overlap-excluded metrics will also be reported.", UserWarning,
+        )
+    manifest["duplicate_summary"] = audit["summary"]
+    train_hashes = set(frames["train"]["sha256"])
+    frames["test"]["_overlaps_train"] = frames["test"]["sha256"].isin(train_hashes)
     return frames, manifest
 
 
@@ -113,19 +140,58 @@ def margins_record(margins):
     }
 
 
+def selection_indices(frame, *, val_size, seed):
+    """Keep exact image copies together when choosing the train-only epoch plan."""
+    if not frame["sha256"].duplicated().any():
+        return (*train_test_split(
+            np.arange(len(frame)), test_size=val_size, random_state=seed, stratify=frame["_label"],
+        ), "image_stratified")
+    groups = frame.groupby("sha256")["_label"].agg(["first", "nunique"])
+    all_classes = set(frame["_label"])
+
+    def valid_partition(train_idx, val_idx):
+        train_counts = frame.iloc[train_idx]["_label"].value_counts()
+        return (
+            set(train_counts.index) == all_classes and train_counts.min() >= 2
+            and set(frame.iloc[val_idx]["_label"]) == all_classes
+        )
+
+    # With consistent group labels, stratify the unique images themselves.
+    if (groups["nunique"] == 1).all():
+        try:
+            train_hashes, val_hashes = train_test_split(
+                groups.index, test_size=val_size, random_state=seed, stratify=groups["first"],
+            )
+            train_idx = np.flatnonzero(frame["sha256"].isin(train_hashes))
+            val_idx = np.flatnonzero(frame["sha256"].isin(val_hashes))
+            if valid_partition(train_idx, val_idx):
+                return train_idx, val_idx, "sha256_grouped_stratified"
+        except ValueError:
+            pass
+    # Mixed-label copies cannot be assigned a single stratification label.
+    splitter = GroupShuffleSplit(n_splits=128, test_size=val_size, random_state=seed)
+    candidates = []
+    for train_idx, val_idx in splitter.split(frame, frame["_label"], groups=frame["sha256"]):
+        if valid_partition(train_idx, val_idx):
+            candidates.append((train_idx, val_idx))
+    if not candidates:
+        raise ValueError("Cannot construct a hash-grouped internal split with all grades; inspect duplicate_audit.json.")
+    train_idx, val_idx = min(candidates, key=lambda pair: abs(len(pair[1]) / len(frame) - val_size))
+    return train_idx, val_idx, "sha256_grouped_class_coverage"
+
+
 def select_plan(frame, manifest, cfg, output, device):
     """Never receives the official test frame or uses its labels for selection."""
     set_seed(int(cfg["seed"]))
-    train_idx, val_idx = train_test_split(
-        np.arange(len(frame)), test_size=float(cfg["split"]["val_size"]),
-        random_state=int(cfg["seed"]), stratify=frame["_label"],
+    train_idx, val_idx, split_method = selection_indices(
+        frame, val_size=float(cfg["split"]["val_size"]), seed=int(cfg["seed"]),
     )
     training, validation = frame.iloc[train_idx].copy(), frame.iloc[val_idx].copy()
     if set(training["sha256"]) & set(validation["sha256"]):
         raise ValueError("Duplicate image contents cross the internal train/validation split.")
     save_json(output / "selection_split.json", {
         "train": training["sample_id"].tolist(), "validation": validation["sample_id"].tolist(),
-        "patient_grouping": "Unavailable in the public grading CSV; image-stratified split.",
+        "method": split_method, "patient_grouping": "Unavailable in the public grading CSV; content groups are not patient IDs.",
     })
     train_loader = make_loader(training, manifest, cfg, training=True)
     val_loader = make_loader(validation, manifest, cfg, training=False)
@@ -218,6 +284,17 @@ def refit(frame, manifest, cfg, output, device, plan):
     return model, amp
 
 
+def test_metrics(predictions, labels):
+    if not len(labels):
+        return None
+    metrics = aggregate_predictions(list(predictions), list(labels), 5)
+    classes = np.rint(predictions).clip(0, 4).astype(int)
+    confusion = np.zeros((5, 5), dtype=int)
+    np.add.at(confusion, (np.asarray(labels), classes), 1)
+    metrics.update(samples=len(labels), accuracy_percent=100 * metrics["accuracy"], confusion_matrix=confusion.tolist())
+    return metrics
+
+
 @torch.no_grad()
 def evaluate_test(model, frame, manifest, cfg, output, device, amp):
     loader = make_loader(frame, manifest, cfg, training=False)
@@ -231,24 +308,38 @@ def evaluate_test(model, frame, manifest, cfg, output, device, amp):
         predictions.extend(batch.tolist())
         labels.extend(targets.tolist())
         ids.extend(image_ids)
-    metrics = aggregate_predictions(predictions, labels, 5)
+    metrics = test_metrics(predictions, labels)
     classes = np.rint(predictions).clip(0, 4).astype(int)
-    confusion = np.zeros((5, 5), dtype=int)
-    np.add.at(confusion, (np.asarray(labels), classes), 1)
-    metrics.update(samples=len(labels), accuracy_percent=100 * metrics["accuracy"], confusion_matrix=confusion.tolist())
+    overlap = frame.set_index("_image_id")["_overlaps_train"].loc[ids].to_numpy(dtype=bool)
+    filtered_metrics = test_metrics(np.asarray(predictions)[~overlap], np.asarray(labels)[~overlap])
     payload = {
         "dataset": "IDRiD", "split": "official_test", "checkpoint": "best.pt",
         "synthetic_smoke_test": not manifest["official_split_verified"],
         "accuracy_definition": "correct discrete grade predictions / N (micro accuracy)",
         "mae_definition": "mean(abs(round_and_clip(prediction, 0, 4) - true_grade))",
         "test": metrics,
+        "data_integrity": {
+            "overlap_policy": manifest.get("overlap_policy", "error"),
+            "duplicate_summary": manifest.get("duplicate_summary", {}),
+            "full_test_contains_train_duplicates": bool(overlap.any()),
+        },
+        "test_without_train_overlap": {
+            "excluded_samples": int(overlap.sum()), "samples": int((~overlap).sum()),
+            "filter": "Exclude test images whose file SHA-256 occurs in official training; other similarities are not checked.",
+            "metrics": filtered_metrics,
+            "status": "available" if filtered_metrics is not None else "unavailable_all_test_images_overlap",
+        },
     }
     save_json(output / "evaluation_metrics.json", payload)
     with (output / "predictions.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["image", "label", "prediction_continuous", "prediction_class", "absolute_error"])
-        writer.writerows((i, y, p, int(c), abs(int(c) - y)) for i, y, p, c in zip(ids, labels, predictions, classes))
-    print(f"IDRiD test: Accuracy={metrics['accuracy_percent']:.2f}% MAE={metrics['mae']:.4f} N={len(labels)}")
+        writer.writerow(["image", "label", "prediction_continuous", "prediction_class", "absolute_error", "overlaps_train"])
+        writer.writerows((i, y, p, int(c), abs(int(c) - y), bool(o)) for i, y, p, c, o in zip(ids, labels, predictions, classes, overlap))
+    print(f"IDRiD full test: Accuracy={metrics['accuracy_percent']:.2f}% MAE={metrics['mae']:.4f} N={len(labels)} train_overlaps={int(overlap.sum())}")
+    if filtered_metrics is not None:
+        print(f"Test excluding train overlaps: Accuracy={filtered_metrics['accuracy_percent']:.2f}% MAE={filtered_metrics['mae']:.4f} N={filtered_metrics['samples']}")
+    else:
+        print("Test excluding train overlaps: unavailable (all test images overlap training).")
     return payload
 
 

@@ -17,11 +17,15 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, default=Path("data/idrid"))
     parser.add_argument("--source-dir", type=Path, help="Existing extracted Kaggle dataset root")
     parser.add_argument("--download", action="store_true", help="Download HERE (run on the remote host)")
+    parser.add_argument(
+        "--overlap-policy", choices=("error", "report"), default="error",
+        help="error: stop on cross-split byte duplicates; report: preserve split and disclose overlap",
+    )
     args = parser.parse_args()
     if args.download and args.source_dir:
         parser.error("Use either --download or --source-dir.")
     source = download_idrid(args.data_dir) if args.download else args.source_dir or args.data_dir / "raw"
-    manifest = prepare_idrid(source, args.data_dir / "prepared")
+    manifest = prepare_idrid(source, args.data_dir / "prepared", overlap_policy=args.overlap_policy)
     print(json.dumps(manifest, indent=2))
 
 

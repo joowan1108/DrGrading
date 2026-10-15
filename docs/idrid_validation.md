@@ -74,10 +74,49 @@ Kaggle ZIP은 원격의 `data/idrid/archive/`에 보관하고, `B. Disease Gradi
 학습/테스트에 같은 파일명이 있으므로 **분할 폴더 + 파일명**으로 연결한다.
 공식 클래스 분포, 누락/중복 영상, 두 분할 사이의 동일 파일 내용(SHA-256)을 검사한다.
 
+### 동일한 이미지 내용이 학습/테스트에 포함된 경우
+
+`Identical image contents`는 같은 파일명이 아니라 **파일 바이트의 SHA-256 일치**를
+뜻한다. 기본 동작은 준비를 중단하고 `prepared/duplicate_audit.json`에 양쪽 파일
+경로, 등급, 해시와 라벨 충돌 여부를 기록하는 것이다. 이 단계에서 중단되면
+`manifest.json`이 없으므로 학습을 먼저 실행할 수 없다.
+
+공급된 413/103 분할을 보존하며 중복을 명시한 결과를 얻으려면 다음처럼 실행한다.
+기존 원격 `raw/`를 다시 검사하므로 데이터를 다시 다운로드하지 않는다.
+
+```bash
+python scripts/prepare_idrid.py --data-dir data/idrid --overlap-policy report && \
+python scripts/train_idrid.py --data-dir data/idrid --device cuda
+```
+
+통합 스크립트에서는 `IDRID_OVERLAP_POLICY=report` 환경변수를 지정할 수 있다.
+report 모드는 영상이나 정답 라벨을 삭제/수정하지 않는다. 전체 테스트 결과에는
+학습 영상과의 중복이 포함되므로 독립적인 일반화 성능이라고 해석하지 않는다.
+`evaluation_metrics.json`의 `data_integrity`에 중복 개수를 표시하고,
+`test_without_train_overlap.metrics`에 해당 영상을 제외한 Accuracy/MAE도 저장한다.
+후자는 표본 수가 103장보다 적어질 수 있어 논문의 원래 테스트 결과와 동일한 평가가 아니다.
+모든 테스트 영상이 중복이면 해당 부분 지표는 `null`과 사유를 기록한다.
+이 해시 검사는 바이트가 완전히 동일한 파일만 찾으며 재압축 영상이나 동일 환자를
+모두 탐지하는 검사는 아니다. 클래스 개수 일치만으로 Kaggle 미러의 내용이 원본과
+동일하다고 보장하지 않는다. 중복의 출처는 보고서를 바탕으로 별도 확인해야 한다.
+
+별도 `git worktree --detach`로 실행 중인 폴더는 다음 명령으로 업데이트한다.
+로컬 코드 변경이 있으면 Git이 중단하므로 해당 변경을 먼저 보존해야 한다.
+
+```bash
+git fetch origin
+git merge --ff-only origin/learnable_dist
+```
+
 ## 학습과 평가 절차
 
 1. 공식 학습 413장만 등급별 층화하여 내부 학습 330장/검증 83장으로 나눈다.
    공개 라벨에는 환자 ID가 없으므로 환자 단위 독립 분할이라고 주장하지 않는다.
+   학습 세트 내부에도 같은 내용의 파일이 있으면 SHA-256 그룹 단위로 층화 분할하여
+   동일 영상이 내부 학습과 검증에 동시에 들어가지 않게 한다. 이 경우 정확한 분할
+   개수는 달라질 수 있으며 `selection_split.json`에 실제 목록과 방식을 기록한다.
+   동일 내용에 서로 다른 등급이 붙어 있으면 그룹을 유지하는 후보 분할 중 모든
+   등급이 포함되고 목표 크기에 가까운 분할을 고른다. 정답 라벨은 변경하지 않는다.
 2. 내부 검증 Accuracy가 가장 높은 Phase 2의 epoch를 선택한다. 동률에서는
    discrete-grade MAE가 작은 쪽, 다시 동률이면 먼저 나온 epoch를 선택한다.
    Scheduler는 내부 검증 MAE를 사용하고, Phase 2에서 10회 연속 개선이 없으면 종료한다.
@@ -97,8 +136,8 @@ Kaggle ZIP은 원격의 `data/idrid/archive/`에 보관하고, `B. Disease Gradi
 
 기본 결과 디렉터리: `checkpoints/hybrid_idrid_efficientnet_v2_s/`
 
-- `evaluation_metrics.json`: 최종 테스트 Accuracy, MAE, Class 0–4 정확도, 혼동행렬 등.
-- `predictions.csv`: 각 영상의 정답, 회귀 출력, 예측 등급, 절대오차.
+- `evaluation_metrics.json`: 전체 테스트 및 학습 중복 제외 부분집합의 지표, 중복 정보.
+- `predictions.csv`: 각 영상의 정답, 회귀 출력, 예측 등급, 절대오차, `overlaps_train` 표시.
 - `best.pt`: 공식 학습 413장으로 재학습한 최종 모델.
 - `run_config.json`: 설정, 데이터 출처/개수, 실행 Git commit 및 환경.
 - `selection_split.json`, `selection_history.json`, `training_plan.json`: 내부 선택 근거.
