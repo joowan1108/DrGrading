@@ -1,7 +1,8 @@
 # IDRiD 추가 데이터 실험
 
 현재 Hybrid 모델(EfficientNetV2-S, PCOL/SCOLw/RMSE, 학습 가능한 간격,
-Two-phase Learning, Spatial Attention, GeM)을 IDRiD에서 새로 학습한다.
+Two-phase Learning, GeM)을 IDRiD에서 새로 학습한다. 현재 IDRiD 설정에서는
+사용자 요청에 따라 Spatial Attention을 끈다. 이전 실행의 저장 설정/결과는 변경하지 않는다.
 EyePACS 체크포인트를 그대로 평가하는 zero-shot 외부 검증과는 다른 실험이다.
 
 ## 논문과 일치시키는 조건
@@ -40,8 +41,9 @@ epoch 및 학습률/scheduler/checkpoint 선택 상태 초기화 여부를 표�
 기존 코드의 기준 commit은 IDRiD 추가 전 `e677bfb`이다. 이 설정에서 PCOL/SCOLw
 계수만 사용자 지정 `0.1/0.1`로 적용했다. Adam(lr=0.001, weight_decay=0.0001),
 최대 75 epochs, validation RMSE 기반 ReduceLROnPlateau(factor=0.2, patience=5),
-조기 종료 patience=13, temperature=1.0, ImageNet 정규화, GeM/Spatial Attention,
-dropout=0.2와 projection 연결 입력을 사용한다. 역빈도 SCOLw 표본 가중치,
+조기 종료 patience=13, temperature=1.0, ImageNet 정규화, GeM,
+dropout=0.2와 projection 연결 입력을 사용한다. 현재 Spatial Attention은 미사용이다.
+역빈도 SCOLw 표본 가중치,
 L2 embedding 정규화, 대조 손실의 평균 1 margin 정규화와 stop-gradient도 유지한다.
 초기 인접 간격은 기존 지정값 `[0.385, 0.451, 0.253, 0.330]`, 간격 학습률은 1e-5다.
 IDRiD 전용 기준은 PCOL/SCOLw 계수와 데이터/분할 어댑터이므로 기존 EyePACS 실행
@@ -75,14 +77,15 @@ U[0.5, 1.0) 초기화와 Softplus 양수 제약은 [CLOC §3.3](https://arxiv.or
 Hybrid 재실험을 위한 선택이며 논문의 전체 학습 프로토콜을 재현한다는 의미는 아니다.
 
 PCOL/SCOLw 가중치 0.1/0.1, RMSE/MMNP 가중치 1/2, MMNP 쌍 평균, temperature,
-ImageNet 정규화, 배치 구성, 데이터 분할, 영상 증강과 모델 구조는 기존 IDRiD 설정과 같다.
+ImageNet 정규화, 배치 구성, 데이터 분할, 영상 증강은 기존 IDRiD 설정과 같다.
+현재 설정에서 Spatial Attention은 꺼져 있으며 EfficientNetV2-S와 GeM은 유지한다.
 Phase 1은 최소 50 epochs 이전에는 종료되지 않으며, 이후 최대 인접 간격 변화량이
 1e-5 이하로 10회 연속 유지되거나 100 epochs에 도달하면 고정한다.
 Phase 2는 검증 RMSE가 50회 연속 개선되지 않으면 조기 종료하며, 전체 500 epochs를
 반드시 수행한다는 의미는 아니다. checkpoint와 최종 평가는 이전처럼 검증 RMSE만으로
 선택한 `best.pt`를 사용하고, 테스트 지표로 학습 설정을 자동 선택하지 않는다.
 
-기본 결과 폴더는 `checkpoints/hybrid_idrid_random_margin_long_a01_b01_seed42/`이다.
+기본 결과 폴더는 `checkpoints/hybrid_idrid_random_margin_long_a01_b01_no_spatial_seed42/`이다.
 `initial_margins.json`에 실제 초기값과 초기화 방식/학습률을 저장한다.
 매 epoch 로그와 `metrics_history.json`에는 현재 간격, 초기값 대비 변화량,
 epoch 간 최대 변화량과 안정 epoch 수를 저장한다. 기존 결과를 덮어쓰지 않는다.
@@ -93,6 +96,53 @@ python scripts/smoke_test_idrid.py --config configs/hybrid_idrid_random_margin_l
 
 위 smoke test는 random 설정을 읽되 합성 데이터와 두 epoch로 단축해 실제 모델의
 초기화·역전파·간격 고정·checkpoint 평가를 확인한다. 500-epoch 성능 검증이 아니다.
+
+## 전체 train + test 학습 후 같은 test 재평가 (독립 평가 아님)
+
+사용자 요청의 별도 실험으로 `scripts/train_idrid_all_data.py`와
+`configs/hybrid_idrid_all_data_no_spatial.yaml`을 추가했다.
+공식 train 413장과 test 103장을 합쳐 **516개 행 전부를 학습 풀에 포함**한다.
+내부 검증은 만들지 않고, 학습 종료 후 **같은 공식 test 103장**을 다시 평가한다.
+이는 학습 데이터 재평가(resubstitution)이며 일반화 성능이나 CLOC의 독립 테스트
+결과와 비교할 수 없다. 기존 `train_idrid.py`의 독립 테스트 절차는 유지한다.
+
+```bash
+git fetch origin
+git merge --ff-only origin/learnable_dist
+python scripts/train_idrid_all_data.py --device cuda
+```
+
+이미 준비한 `data/idrid/prepared/`를 사용하며 데이터를 다시 받지 않는다.
+아직 준비하지 않았다면 `prepare_idrid.py`를 먼저 실행한다. 동일 파일 내용이 양쪽에
+있는 미러는 기존처럼 `--overlap-policy report`로 감사 결과를 남기고 준비한다.
+학습에서는 행/라벨을 임의로 삭제하거나 변경하지 않으므로 원본 중복/라벨 충돌도
+그대로 보존되며, 실제 고유 영상 수와 중복 요약을 `training_split.json`에 기록한다.
+
+모델은 **ImageNet 사전학습 EfficientNetV2-S + GeM, Spatial Attention 미사용**이다.
+PCOL/SCOLw 가중치 0.1/0.1, RMSE/MMNP 1/2, margin U[0.5, 1.0) 초기화,
+Phase 1 최소 50/최대 100 epochs, 나머지 증강/정규화는 random 장기 설정을 유지한다.
+기존 층화 미니배치를 사용하며 배치 크기 24이면 epoch당 22회 업데이트한다.
+이는 516개 영상을 매 epoch 정확히 한 번씩 순회한다는 의미는 아니며 표본 반복이 가능하다.
+검증이 없으므로 scheduler 입력은 **학습 RMSE**로 바꾸고, 조기 종료와 best checkpoint
+선택은 사용하지 않는다. 기본 500 epochs를 학습한 **마지막 모델 `final.pt`**를 다시
+불러와 평가한다. Phase 2에서도 고정 간격에 대한 MMNP는 네트워크를 갱신한다.
+
+결과 폴더는 `checkpoints/hybrid_idrid_all_data_gem_no_spatial_seed42/`이다.
+`evaluation_metrics.json`의 `seen_test`에 Accuracy, MAE, 클래스별 성능과 혼동행렬을
+저장한다. `evaluation_is_independent: false`, `official_test_used_for_training: true`,
+`independent_test: null`을 함께 기록한다. 콘솔도 `TRAIN-SEEN (NOT independent)`로
+표시하며 `predictions.csv`에는 `included_in_training_pool` 열을 둔다.
+출력 폴더가 이미 있으면 덮어쓰지 않으므로 `--output-dir`로 새 경로를 지정한다.
+
+```bash
+python scripts/train_idrid_all_data.py --device cuda --epochs 500 \
+  --output-dir checkpoints/idrid_all_data_no_spatial_run02
+python scripts/smoke_test_idrid_all_data.py
+```
+
+마지막 명령은 다운로드 없이 합성 영상/실제 EfficientNetV2-S로 두 epoch를 실행하는
+동작 검사다. 실제 IDRiD 성능 실험은 아니며, 로컬에서 원격 GPU 학습을 시작하지 않는다.
+설정 변경은 이미 실행 중인 학습에는 적용되지 않으므로 새 프로세스로 시작한다.
 
 ## 원격 컴퓨터에서 실행
 
@@ -203,7 +253,7 @@ git merge --ff-only origin/learnable_dist
 
 ## 저장 결과
 
-기본 결과 디렉터리: `checkpoints/hybrid_idrid_efficientnet_v2_s_existing_a01_b01/`
+기본 결과 디렉터리: `checkpoints/hybrid_idrid_efficientnet_v2_s_existing_a01_b01_no_spatial/`
 
 이전 IDRiD 학습 방식/가중치 실행 결과와 구분하기 위해 기본 경로를 변경했다.
 이미 실행 중인 프로세스는 시작할 때 읽은 설정으로 계속 학습하므로,
