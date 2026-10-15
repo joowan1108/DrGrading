@@ -31,6 +31,12 @@ PCOL과 SCOLw 가중치는 이전 실험에 맞춰 각각 `alpha: 0.1`, `beta: 0
 실행 시작 시 가중치를 출력하며, 매 epoch가 끝나면 각 손실의 원래 값과 가중치를
 곱한 기여도를 함께 출력한다. 실제 실행 값은 `run_config.json`에도 저장한다.
 
+각 epoch 시작 시 `[Phase 1: joint]` 또는 `[Phase 2: frozen]`, epoch 번호,
+네트워크 학습률과 margin 학습 여부를 출력한다. 진행 막대에도 phase를 표시한다.
+`[Phase 1 -> Phase 2]` 전환 로그에는 전환 사유, 고정 간격, 다음 phase의 시작
+epoch 및 학습률/scheduler/checkpoint 선택 상태 초기화 여부를 표시한다.
+`metrics_history.json`의 각 epoch에도 `phase`와 margin 고정 여부를 저장한다.
+
 기존 코드의 기준 commit은 IDRiD 추가 전 `e677bfb`이다. 이 설정에서 PCOL/SCOLw
 계수만 사용자 지정 `0.1/0.1`로 적용했다. Adam(lr=0.001, weight_decay=0.0001),
 최대 75 epochs, validation RMSE 기반 ReduceLROnPlateau(factor=0.2, patience=5),

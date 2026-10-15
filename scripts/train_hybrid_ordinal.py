@@ -366,6 +366,7 @@ def train_one_epoch(
     optimization_parameters,
     cfg,
     epoch: int,
+    phase: str | None = None,
 ):
     model.train()
     meter_names = [
@@ -382,7 +383,8 @@ def train_one_epoch(
     mmnp_boundary_stats = None
     epoch_predictions: list[float] = []
     epoch_targets: list[int] = []
-    progress = tqdm(contrastive_loader, desc=f"train {epoch}", leave=False)
+    description = f"train {epoch}" + (f" [{phase}]" if phase else "")
+    progress = tqdm(contrastive_loader, desc=description, leave=False)
     shared_batch = regression_loader is contrastive_loader
     regression_iter = None if shared_batch else iter(regression_loader)
 

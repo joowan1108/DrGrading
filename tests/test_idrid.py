@@ -223,7 +223,7 @@ def test_pair_mean_mmnp_matches_previous_implementation_and_gradient():
 
 
 @pytest.mark.parametrize("overlap_count", [0, 1, 10])
-def test_existing_training_freeze_best_reload_and_metrics(tmp_path, monkeypatch, overlap_count):
+def test_existing_training_freeze_best_reload_and_metrics(tmp_path, monkeypatch, capsys, overlap_count):
     torch.set_num_threads(2)
     write_synthetic_dataset(tmp_path / "raw")
     for index in range(1, overlap_count + 1):
@@ -262,6 +262,14 @@ def test_existing_training_freeze_best_reload_and_metrics(tmp_path, monkeypatch,
     assert records[0]["margins"]["frozen"] is False
     assert records[1]["margins"]["frozen"] is True
     assert records[0]["margins"]["values"] == records[1]["margins"]["values"]
+    captured = capsys.readouterr()
+    assert "[Phase 1: joint] Epoch 1/2" in captured.out
+    assert "[Phase 2: frozen] Epoch 2/2" in captured.out
+    assert "[Phase 1 -> Phase 2] After epoch 1" in captured.out
+    assert "margins=trainable" in captured.out
+    assert "margins=fixed" in captured.out
+    assert "train 1 [Phase 1: joint]" in captured.err
+    assert "train 2 [Phase 2: frozen]" in captured.err
     best = json.loads((results / "best_metrics.json").read_text())
     assert best["selection_metric"] == "val.rmse_loss"
     assert best["phase"] == "phase2_frozen"

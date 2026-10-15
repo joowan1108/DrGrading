@@ -219,9 +219,18 @@ def fit(frame, manifest, cfg, output, device):
     history = []
     for epoch in range(1, int(cfg["train"]["epochs"]) + 1):
         learning_rates = [float(g["lr"]) for g in optimizer.param_groups]
+        phase_label = {
+            "phase1_joint": "Phase 1: joint", "phase2_frozen": "Phase 2: frozen", "fixed": "Fixed margins",
+        }[phase]
+        margin_status = "trainable" if margins is not None and margins.raw_margins.requires_grad else "fixed"
+        print(
+            f"[{phase_label}] Epoch {epoch}/{cfg['train']['epochs']} | "
+            f"network_lr={learning_rates[0]:.2e} | margins={margin_status}",
+            flush=True,
+        )
         train_metrics = train_one_epoch(
             model, train_loader, train_loader, optimizer, scaler, device, amp,
-            criteria, margins, parameters, cfg, epoch,
+            criteria, margins, parameters, cfg, epoch, phase=phase_label,
         )
         val_metrics = evaluate(model, val_loader, device, amp, cfg)
         if val_metrics.get("nonfinite_predictions", 0):
@@ -286,7 +295,14 @@ def fit(frame, manifest, cfg, output, device):
                 bad_epochs = 0
                 best_val_rmse, best_epoch = float("inf"), 0
                 best_val, best_train, best_margins = {}, {}, {}
-                print(f"Freezing margins and starting phase 2: {freeze_reason}")
+                values = ", ".join(f"{value:.4f}" for value in current_margins["values"])
+                print(
+                    f"[Phase 1 -> Phase 2] After epoch {epoch}: {freeze_reason}. "
+                    f"Frozen margins=[{values}]. Phase 2 starts at epoch {epoch + 1}; "
+                    f"network_lr reset to {optimizer.param_groups[0]['lr']:.2e}; "
+                    "scheduler, best-checkpoint selection and early-stopping counter reset.",
+                    flush=True,
+                )
         elif bad_epochs >= int(cfg["train"]["early_stopping_patience"]):
             print(f"Early stopping after {bad_epochs} epochs without validation RMSE improvement.")
             break
