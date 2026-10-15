@@ -47,6 +47,53 @@ L2 embedding 정규화, 대조 손실의 평균 1 margin 정규화와 stop-gradi
 IDRiD 전용 기준은 PCOL/SCOLw 계수와 데이터/분할 어댑터이므로 기존 EyePACS 실행
 설정 파일은 변경하지 않는다.
 
+## Random margin · 장기 학습 재실험
+
+새 실행 파일은 `scripts/train_idrid_random_margin.py`, 설정은
+`configs/hybrid_idrid_random_margin_long.yaml`이다. 기존 75-epoch 실험 설정은
+비교를 위해 보존한다. 원격 프로젝트 폴더에서 기존 준비 데이터를 사용한다.
+
+```bash
+python scripts/train_idrid_random_margin.py --device cuda
+```
+
+| 조건 | 기존 IDRiD 실험 | Random margin 재실험 |
+|---|---|---|
+| 인접 간격 초기화 | 고정된 4개 값 | 각 간격을 U[0.5, 1.0)에서 추출 |
+| 간격 학습률 | 1e-5 | 1e-3 |
+| 전체 epoch 상한 | 75 | 500 |
+| Phase 1 최소/최대 | 20/30 | 50/100 |
+| 간격 변화량 허용값 | 1e-3 | 1e-5 |
+| 연속 안정 epoch 수 | 3 | 10 |
+| Phase 2 조기 종료 patience | 13 | 50 |
+| LR scheduler patience | 5 | 10 |
+
+U[0.5, 1.0) 초기화와 Softplus 양수 제약은 [CLOC §3.3](https://arxiv.org/pdf/2504.17813)
+설명을 따른다. 학습 중 간격을 0.5 이상으로 고정하는 제약은 아니며 0보다 큰 값으로
+계속 학습한다. seed=42로 전체 초기화가 재현되므로 같은 설정/seed로 다시 실행하면
+같은 초기 간격이 나온다. 학습 기간, margin 학습률, 수렴 허용값과 patience는 이번
+Hybrid 재실험을 위한 선택이며 논문의 전체 학습 프로토콜을 재현한다는 의미는 아니다.
+
+PCOL/SCOLw 가중치 0.1/0.1, RMSE/MMNP 가중치 1/2, MMNP 쌍 평균, temperature,
+ImageNet 정규화, 배치 구성, 데이터 분할, 영상 증강과 모델 구조는 기존 IDRiD 설정과 같다.
+Phase 1은 최소 50 epochs 이전에는 종료되지 않으며, 이후 최대 인접 간격 변화량이
+1e-5 이하로 10회 연속 유지되거나 100 epochs에 도달하면 고정한다.
+Phase 2는 검증 RMSE가 50회 연속 개선되지 않으면 조기 종료하며, 전체 500 epochs를
+반드시 수행한다는 의미는 아니다. checkpoint와 최종 평가는 이전처럼 검증 RMSE만으로
+선택한 `best.pt`를 사용하고, 테스트 지표로 학습 설정을 자동 선택하지 않는다.
+
+기본 결과 폴더는 `checkpoints/hybrid_idrid_random_margin_long_a01_b01_seed42/`이다.
+`initial_margins.json`에 실제 초기값과 초기화 방식/학습률을 저장한다.
+매 epoch 로그와 `metrics_history.json`에는 현재 간격, 초기값 대비 변화량,
+epoch 간 최대 변화량과 안정 epoch 수를 저장한다. 기존 결과를 덮어쓰지 않는다.
+
+```bash
+python scripts/smoke_test_idrid.py --config configs/hybrid_idrid_random_margin_long.yaml
+```
+
+위 smoke test는 random 설정을 읽되 합성 데이터와 두 epoch로 단축해 실제 모델의
+초기화·역전파·간격 고정·checkpoint 평가를 확인한다. 500-epoch 성능 검증이 아니다.
+
 ## 원격 컴퓨터에서 실행
 
 원격 GPU 컴퓨터의 프로젝트 디렉터리에서 실행한다. 이 명령은 명령을 실행한

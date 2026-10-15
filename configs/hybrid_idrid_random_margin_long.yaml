@@ -1,0 +1,74 @@
+# Our hybrid model with CLOC-style U[0.5, 1.0) margin initialization.
+# Longer training/stopping settings below are experiment choices, not a CLOC reproduction.
+seed: 42
+device: auto
+data:
+  data_dir: data/idrid
+  image_size: 224
+  normalize: imagenet
+  batch_size: 24
+  num_workers: 4
+  augmentation:
+    horizontal_flip_p: 0.5
+    vertical_flip_p: 0.5
+    rotation_degrees: 30
+    blur_p: 0.5
+    blur_kernel_size: 5
+    blur_sigma: [0.1, 2.0]
+    color_jitter_p: 0.5
+    brightness: 0.2
+    contrast: 0.2
+    saturation: 0.2
+    hue: 0.05
+split:
+  val_size: 0.2
+model:
+  backbone: efficientnet_v2_s
+  pretrained_imagenet: true
+  projection_hidden_dim: 1280
+  projection_dim: 128
+  regression_input: projection_concat
+  regression_hidden_dim: 1280
+  dropout: 0.2
+  num_classes: 5
+  spatial_attention: true
+  spatial_attention_kernel_size: 7
+  pooling: gem
+loss:
+  alpha: 0.1
+  beta: 0.1
+  rmse_weight: 1.0
+  mmnp_weight: 2.0
+  temperature: 1.0
+  ordinal_margin_scale: 1.0
+  normalize_ordinal_distance: false
+  square_ordinal_distance: true
+  learnable_ordinal_margins: true
+  margin_parameterization: softplus
+  margin_init: 0.75
+  margin_init_min: 0.5
+  margin_init_max: 1.0
+  margin_min: 0.0
+  margin_lr: 0.001
+  margin_phase1_min_epochs: 50
+  margin_phase1_max_epochs: 100
+  margin_convergence_tolerance: 0.00001
+  margin_convergence_patience: 10
+  scol_objective: logsumexp
+  pcol_updates_learnable_margins: false
+  scol_updates_learnable_margins: false
+  normalize_learnable_margin_mean: true
+  mmnp_pair_reduction: mean
+  mmnp_reduction: mean
+  reduction: mean
+train:
+  epochs: 500
+  optimizer: adam
+  lr: 0.001
+  weight_decay: 0.0001
+  amp: true
+  max_grad_norm: 5.0
+  lr_plateau_factor: 0.2
+  lr_plateau_patience: 10
+  early_stopping_patience: 50
+  output_dir: checkpoints/hybrid_idrid_random_margin_long_a01_b01_seed42

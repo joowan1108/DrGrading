@@ -22,6 +22,7 @@ import eyepacs_hybrid_ordinal.idrid as idrid
 from eyepacs_hybrid_ordinal.idrid import OFFICIAL_COUNTS, extract_grading_archive, prepare_idrid
 from eyepacs_hybrid_ordinal.transforms import CropBlackBorder, make_idrid_transform
 from eyepacs_hybrid_ordinal.losses import CumulativeOrdinalMargins, WeightedSupervisedContrastiveOrdinalLoss
+from eyepacs_hybrid_ordinal.utils import load_config, set_seed
 from smoke_test_idrid import smoke_config, write_synthetic_dataset
 
 
@@ -339,3 +340,51 @@ def test_best_checkpoint_and_scheduler_use_validation_rmse(tmp_path, monkeypatch
     assert scheduler_values == [0.1, 0.7, 0.6, 0.8]
     checkpoint = torch.load(tmp_path / "results" / "best.pt", weights_only=True)
     assert checkpoint["epoch"] == 3
+
+
+def test_long_run_random_margins_are_uniform_reproducible_and_trainable(monkeypatch):
+    cfg = load_config(ROOT / "configs/hybrid_idrid_random_margin_long.yaml")
+    monkeypatch.setattr(train_idrid, "HybridOrdinalNet", TinyHybrid)
+    set_seed(cfg["seed"])
+    _, margins, _, _, optimizer, _, _ = train_idrid.build_components(cfg, torch.device("cpu"))
+    values = margins.margin_values().detach().clone()
+    assert torch.all((values >= 0.5) & (values < 1.0))
+    assert values.unique().numel() == 4
+    assert "margin_init_values" not in cfg["loss"]
+    assert margins.raw_margins.requires_grad
+    assert optimizer.param_groups[1]["lr"] == 0.001
+    set_seed(cfg["seed"])
+    repeated = train_idrid.build_components(cfg, torch.device("cpu"))[1]
+    torch.testing.assert_close(values, repeated.margin_values())
+    assert cfg["loss"]["alpha"] == cfg["loss"]["beta"] == 0.1
+    assert cfg["train"]["epochs"] == 500
+    assert cfg["train"]["early_stopping_patience"] == 50
+
+
+def test_random_margin_training_respects_minimum_phase_and_relaxed_stopping(tmp_path, monkeypatch):
+    torch.set_num_threads(2)
+    write_synthetic_dataset(tmp_path / "raw")
+    prepare_idrid(tmp_path / "raw", tmp_path / "prepared", strict=False)
+    monkeypatch.setattr(train_idrid, "HybridOrdinalNet", TinyHybrid)
+    # Constant validation RMSE lets us verify the patience counter exactly.
+    monkeypatch.setattr(train_idrid, "evaluate", lambda *args, **kwargs: {
+        "rmse_loss": 0.7, "accuracy": 0.2, "mae": 1.0,
+    })
+    cfg = smoke_config(tmp_path, tmp_path / "results", ROOT / "configs/hybrid_idrid_random_margin_long.yaml")
+    cfg["loss"].update(
+        margin_phase1_min_epochs=3, margin_phase1_max_epochs=4,
+        margin_convergence_tolerance=1.0, margin_convergence_patience=2,
+    )
+    cfg["train"].update(epochs=8, early_stopping_patience=3)
+    payload = train_idrid.run(cfg, allow_synthetic=True)
+    initial = json.loads((tmp_path / "results" / "initial_margins.json").read_text())
+    assert initial["initialization"]["method"] == "uniform"
+    assert all(0.5 <= value < 1.0 for value in initial["values"])
+    rows = json.loads((tmp_path / "results" / "metrics_history.json").read_text())["epochs"]
+    assert [row["phase"] for row in rows] == ["phase1_joint"] * 3 + ["phase2_frozen"] * 4
+    assert rows[0]["margins"]["initial_values"] == initial["values"]
+    assert any(value != 0 for value in rows[0]["margins"]["delta_from_initial"])
+    assert rows[-1]["margins"]["max_change"] == 0.0
+    assert rows[-1]["margins"]["values"] == rows[2]["margins"]["values"]
+    assert payload["best_epoch"] == 4
+    assert rows[-1]["epoch"] == 7  # 3 unimproved phase-2 epochs after epoch 4.

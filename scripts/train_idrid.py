@@ -209,6 +209,21 @@ def fit(frame, manifest, cfg, output, device):
     train_loader = make_loader(training, manifest, cfg, training=True)
     val_loader = make_loader(validation, manifest, cfg, training=False)
     model, margins, criteria, parameters, optimizer, scaler, amp = build_components(cfg, device)
+    initial_margins = margins_record(margins)
+    options = cfg["loss"]
+    initial_margins["initialization"] = {
+        "method": "uniform" if options.get("margin_init_min") is not None else "fixed",
+        "uniform_range": [options.get("margin_init_min"), options.get("margin_init_max")],
+        "seed": int(cfg["seed"]), "margin_lr": float(options["margin_lr"]),
+    }
+    save_json(output / "initial_margins.json", initial_margins)
+    if margins is not None:
+        print(
+            f"Initial margins ({initial_margins['initialization']['method']}): "
+            + ", ".join(f"{value:.6f}" for value in initial_margins["values"])
+            + f" | margin_lr={float(options['margin_lr']):.2e}",
+            flush=True,
+        )
     scheduler = build_scheduler(optimizer, cfg)
     phase = "phase1_joint" if margins is not None else "fixed"
     previous = None
@@ -236,6 +251,7 @@ def fit(frame, manifest, cfg, output, device):
         if val_metrics.get("nonfinite_predictions", 0):
             raise FloatingPointError("Non-finite validation predictions.")
         scheduler.step(float(val_metrics["rmse_loss"]))
+        change = 0.0 if phase == "phase2_frozen" else None
         if phase == "phase1_joint":
             current = margins.margin_values().detach().clone()
             change = float((current - previous).abs().max()) if previous is not None else None
@@ -243,8 +259,13 @@ def fit(frame, manifest, cfg, output, device):
             previous = current
         current_margins = {
             **margins_record(margins), "phase": phase, "freeze_reason": freeze_reason,
-            "stable_epochs": stable_epochs,
+            "stable_epochs": stable_epochs, "max_change": change,
         }
+        if margins is not None:
+            current_margins["initial_values"] = initial_margins["values"]
+            current_margins["delta_from_initial"] = [
+                value - initial for value, initial in zip(current_margins["values"], initial_margins["values"])
+            ]
         payload = {
             "epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(), "config": cfg,
@@ -274,6 +295,16 @@ def fit(frame, manifest, cfg, output, device):
             f"val_rmse={val_metrics['rmse_loss']:.4f} val_accuracy={val_metrics['accuracy']:.4f} "
             f"val_mae={val_metrics['mae']:.4f}"
         )
+        if margins is not None:
+            values = ", ".join(f"{value:.6f}" for value in current_margins["values"])
+            delta = ", ".join(f"{value:+.6f}" for value in current_margins["delta_from_initial"])
+            print(
+                f"margins=[{values}] delta_from_initial=[{delta}] "
+                f"max_change={change if change is not None else 'n/a'} "
+                f"stable_epochs={stable_epochs} | "
+                f"convergence_tolerance={float(options['margin_convergence_tolerance']):.2e}",
+                flush=True,
+            )
         save_json(output / "metrics_history.json", {"selection_metric": "val.rmse_loss", "epochs": history})
         save_json(output / "metrics.json", {
             "epoch": epoch, "best_epoch": best_epoch, "best_val_rmse_loss": best_val_rmse,
@@ -383,6 +414,12 @@ def run(cfg, *, allow_synthetic=False):
         f"RMSE={cfg['loss']['rmse_weight']} MMNP={cfg['loss']['mmnp_weight']} "
         f"MMNP pair_reduction={cfg['loss'].get('mmnp_pair_reduction', 'mean')}"
     )
+    print(
+        f"Epoch limit={cfg['train']['epochs']} | early_stopping_patience={cfg['train']['early_stopping_patience']} | "
+        f"phase1_epochs={cfg['loss']['margin_phase1_min_epochs']}..{cfg['loss']['margin_phase1_max_epochs']} | "
+        f"convergence_patience={cfg['loss']['margin_convergence_patience']}",
+        flush=True,
+    )
     output.mkdir(parents=True, exist_ok=True)
     git_rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
     save_json(output / "run_config.json", {
@@ -404,9 +441,9 @@ def run(cfg, *, allow_synthetic=False):
     return payload
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="configs/hybrid_idrid_efficientnet_v2_s.yaml")
+def main(default_config="configs/hybrid_idrid_efficientnet_v2_s.yaml"):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("--config", default=default_config, help="Training YAML configuration")
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--device")

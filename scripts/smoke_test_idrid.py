@@ -40,8 +40,8 @@ def write_synthetic_dataset(root: Path, counts=None):
                     writer.writerow([stem, grade, 0])
 
 
-def smoke_config(data_dir: Path, output_dir: Path):
-    cfg = load_config(ROOT / "configs/hybrid_idrid_efficientnet_v2_s.yaml")
+def smoke_config(data_dir: Path, output_dir: Path, config_path=None):
+    cfg = load_config(config_path or ROOT / "configs/hybrid_idrid_efficientnet_v2_s.yaml")
     cfg["device"] = "cpu"
     cfg["data"].update(data_dir=str(data_dir), batch_size=10, num_workers=0)
     cfg["model"].update(pretrained_imagenet=False, projection_hidden_dim=32, projection_dim=8, regression_hidden_dim=32)
@@ -54,6 +54,7 @@ def smoke_config(data_dir: Path, output_dir: Path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path)
+    parser.add_argument("--config", type=Path, help="Configuration to smoke-test with the short synthetic schedule")
     args = parser.parse_args()
     work = args.work_dir or Path(tempfile.mkdtemp(prefix="idrid-smoke-"))
     if work.exists() and any(work.iterdir()):
@@ -62,7 +63,7 @@ def main():
     source = work / "data" / "raw"
     write_synthetic_dataset(source)
     prepare_idrid(source, work / "data" / "prepared", strict=False)
-    payload = run(smoke_config(work / "data", work / "results"), allow_synthetic=True)
+    payload = run(smoke_config(work / "data", work / "results", args.config), allow_synthetic=True)
     history = json.loads((work / "results" / "metrics_history.json").read_text())
     assert [r["phase"] for r in history["epochs"]] == ["phase1_joint", "phase2_frozen"]
     assert history["epochs"][0]["margins"]["values"] == history["epochs"][1]["margins"]["values"]
