@@ -68,7 +68,9 @@ def main():
     assert history["epochs"][0]["margins"]["values"] == history["epochs"][1]["margins"]["values"]
     assert payload["test"]["samples"] == 10
     assert payload["synthetic_smoke_test"] is True
-    print(f"PASS: real EfficientNetV2-S, 224x224, GeM, spatial attention, both phases, checkpoint reload, test metrics.\nSynthetic artifacts: {work}")
+    assert payload["selection_metric"] == "val.rmse_loss"
+    assert not (work / "results" / "training_plan.json").exists()
+    print(f"PASS: existing hybrid protocol, PCOL/SCOLw weights 0.1, pair-mean MMNP, real EfficientNetV2-S, both phases, best-checkpoint test evaluation.\nSynthetic artifacts: {work}")
 
 
 if __name__ == "__main__":

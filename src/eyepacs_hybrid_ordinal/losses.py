@@ -236,6 +236,7 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         square_ordinal_distance: bool = False,
         reduction: str = "mean",
         objective: str = "logsumexp",
+        pair_reduction: str = "sum",
     ) -> None:
         super().__init__()
         if temperature <= 0:
@@ -244,6 +245,8 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
             raise ValueError("reduction must be 'sum' or 'mean'.")
         if objective not in {"logsumexp", "mmnp"}:
             raise ValueError("objective must be 'logsumexp' or 'mmnp'.")
+        if pair_reduction not in {"sum", "mean"}:
+            raise ValueError("pair_reduction must be 'sum' or 'mean'.")
         self.temperature = float(temperature)
         self.num_classes = int(num_classes)
         self.margin_scale = float(margin_scale)
@@ -251,6 +254,7 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
         self.square_ordinal_distance = bool(square_ordinal_distance)
         self.reduction = reduction
         self.objective = objective
+        self.pair_reduction = pair_reduction
         self.last_active_violation_rate: float | None = None
         self.last_num_comparisons = 0
         self.last_boundary_stats: dict[str, torch.Tensor] | None = None
@@ -333,8 +337,10 @@ class WeightedSupervisedContrastiveOrdinalLoss(nn.Module):
                     - positive_similarities.unsqueeze(1)
                 )
                 hinge_losses = F.relu(violations)
-                # CLOC Eq. (2): sum over positive-negative pairs for each anchor.
-                anchor_losses.append(hinge_losses.sum())
+                # Preserve the historical pair mean when explicitly requested.
+                anchor_losses.append(
+                    hinge_losses.mean() if self.pair_reduction == "mean" else hinge_losses.sum()
+                )
                 active_violations = active_violations + (violations > 0).sum()
                 total_violations += violations.numel()
                 negative_labels = labels[negative_indices]

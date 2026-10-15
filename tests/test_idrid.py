@@ -21,6 +21,7 @@ import train_idrid
 import eyepacs_hybrid_ordinal.idrid as idrid
 from eyepacs_hybrid_ordinal.idrid import OFFICIAL_COUNTS, extract_grading_archive, prepare_idrid
 from eyepacs_hybrid_ordinal.transforms import CropBlackBorder, make_idrid_transform
+from eyepacs_hybrid_ordinal.losses import CumulativeOrdinalMargins, WeightedSupervisedContrastiveOrdinalLoss
 from smoke_test_idrid import smoke_config, write_synthetic_dataset
 
 
@@ -192,8 +193,37 @@ class TinyHybrid(nn.Module):
         return {"pcol": pcol, "scol": scol, "prediction": self.regression(torch.cat([pcol, scol], dim=1)).squeeze(1)}
 
 
+def test_pair_mean_mmnp_matches_previous_implementation_and_gradient():
+    torch.manual_seed(17)
+    labels = torch.tensor([0, 0, 1, 1, 1, 3, 3])
+    embeddings = torch.randn(7, 8, requires_grad=True)
+    margins = CumulativeOrdinalMargins(num_classes=5, initial_margin_values=[0.385, 0.451, 0.253, 0.330])
+    positions = torch.cat([torch.zeros(1), margins.margin_values().cumsum(0)])
+    normalized = torch.nn.functional.normalize(embeddings, dim=1)
+    similarities = normalized @ normalized.T
+    means = []
+    for anchor in range(len(labels)):
+        positives = [i for i in range(len(labels)) if i != anchor and labels[i] == labels[anchor]]
+        negatives = [i for i in range(len(labels)) if labels[i] != labels[anchor]]
+        terms = [torch.relu(
+            abs(positions[labels[anchor]] - positions[labels[n]])
+            + similarities[anchor, n] - similarities[anchor, p]
+        ) for p in positives for n in negatives]
+        means.append(torch.stack(terms).mean())
+    expected = torch.stack(means).mean()
+    criterion = WeightedSupervisedContrastiveOrdinalLoss(
+        num_classes=5, objective="mmnp", reduction="mean", pair_reduction="mean",
+    )
+    actual = criterion(embeddings, labels, learnable_margins=margins)
+    torch.testing.assert_close(actual, expected)
+    expected_grad = torch.autograd.grad(expected, (embeddings, margins.raw_margins), retain_graph=True)
+    actual_grad = torch.autograd.grad(actual, (embeddings, margins.raw_margins))
+    for actual_value, expected_value in zip(actual_grad, expected_grad):
+        torch.testing.assert_close(actual_value, expected_value)
+
+
 @pytest.mark.parametrize("overlap_count", [0, 1, 10])
-def test_full_pipeline_select_refit_freeze_reload_and_metrics(tmp_path, monkeypatch, overlap_count):
+def test_existing_training_freeze_best_reload_and_metrics(tmp_path, monkeypatch, overlap_count):
     torch.set_num_threads(2)
     write_synthetic_dataset(tmp_path / "raw")
     for index in range(1, overlap_count + 1):
@@ -203,7 +233,14 @@ def test_full_pipeline_select_refit_freeze_reload_and_metrics(tmp_path, monkeypa
             prepare_idrid(tmp_path / "raw", tmp_path / "prepared", strict=False, overlap_policy="report")
     else:
         prepare_idrid(tmp_path / "raw", tmp_path / "prepared", strict=False)
-    monkeypatch.setattr(train_idrid, "HybridOrdinalNet", TinyHybrid)
+    created_models = []
+
+    def make_model(**kwargs):
+        model = TinyHybrid(**kwargs)
+        created_models.append(model)
+        return model
+
+    monkeypatch.setattr(train_idrid, "HybridOrdinalNet", make_model)
     cfg = smoke_config(tmp_path, tmp_path / "results")
     with pytest.raises(ValueError, match="official 413/103"):
         train_idrid.run(cfg)
@@ -213,21 +250,27 @@ def test_full_pipeline_select_refit_freeze_reload_and_metrics(tmp_path, monkeypa
     else:
         payload = train_idrid.run(cfg, allow_synthetic=True)
     results = tmp_path / "results"
+    assert len(created_models) == 1  # No second model/full-training refit.
     saved_config = json.loads((results / "run_config.json").read_text())["config"]
     assert saved_config["loss"]["alpha"] == 0.1
     assert saved_config["loss"]["beta"] == 0.1
     records = json.loads((results / "metrics_history.json").read_text())["epochs"]
-    selection_records = json.loads((results / "selection_history.json").read_text())["epochs"]
-    for record in selection_records + records:
+    for record in records:
         losses = record["train"]
         expected_total = 0.1 * losses["pcol"] + 0.1 * losses["scol"] + losses["rmse"] + 2.0 * losses["mmnp"]
         assert losses["total"] == pytest.approx(expected_total, rel=1e-5)
     assert records[0]["margins"]["frozen"] is False
     assert records[1]["margins"]["frozen"] is True
     assert records[0]["margins"]["values"] == records[1]["margins"]["values"]
+    best = json.loads((results / "best_metrics.json").read_text())
+    assert best["selection_metric"] == "val.rmse_loss"
+    assert best["phase"] == "phase2_frozen"
+    assert payload["best_epoch"] == 2
+    assert not (results / "training_plan.json").exists()
+    assert not (results / "selection_best.pt").exists()
     initial = train_idrid.build_components(cfg, torch.device("cpu"))[1]
     assert records[0]["margins"]["values"] != initial.margin_values().tolist()
-    split = json.loads((results / "selection_split.json").read_text())
+    split = json.loads((results / "training_split.json").read_text())
     assert set(split["train"]).isdisjoint(split["validation"])
     assert all(s.startswith("train:") for s in split["train"] + split["validation"])
     predictions = pd.read_csv(results / "predictions.csv")
@@ -251,3 +294,40 @@ def test_full_pipeline_select_refit_freeze_reload_and_metrics(tmp_path, monkeypa
         assert subset["metrics"]["mae"] == pytest.approx(abs(nonoverlap.label - nonoverlap.prediction_class).mean())
     with pytest.raises(FileExistsError, match="not empty"):
         train_idrid.run(cfg, allow_synthetic=True)
+
+
+def test_best_checkpoint_and_scheduler_use_validation_rmse(tmp_path, monkeypatch):
+    torch.set_num_threads(2)
+    write_synthetic_dataset(tmp_path / "raw")
+    prepare_idrid(tmp_path / "raw", tmp_path / "prepared", strict=False)
+    monkeypatch.setattr(train_idrid, "HybridOrdinalNet", TinyHybrid)
+    scores = iter([
+        {"rmse_loss": 0.1, "accuracy": 1.0, "mae": 0.0},  # Phase 1 is reset.
+        {"rmse_loss": 0.7, "accuracy": 0.9, "mae": 0.1},
+        {"rmse_loss": 0.6, "accuracy": 0.1, "mae": 1.0},  # Best RMSE despite worse accuracy/MAE.
+        {"rmse_loss": 0.8, "accuracy": 1.0, "mae": 0.0},
+    ])
+    monkeypatch.setattr(train_idrid, "evaluate", lambda *args, **kwargs: next(scores))
+    scheduler_values = []
+    real_builder = train_idrid.build_scheduler
+
+    class RecordingScheduler:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def step(self, value):
+            scheduler_values.append(value)
+            self.inner.step(value)
+
+        def state_dict(self):
+            return self.inner.state_dict()
+
+    monkeypatch.setattr(train_idrid, "build_scheduler", lambda optimizer, cfg: RecordingScheduler(real_builder(optimizer, cfg)))
+    cfg = smoke_config(tmp_path, tmp_path / "results")
+    cfg["train"]["epochs"] = 4
+    payload = train_idrid.run(cfg, allow_synthetic=True)
+    assert payload["best_epoch"] == 3
+    assert payload["best_val_rmse_loss"] == 0.6
+    assert scheduler_values == [0.1, 0.7, 0.6, 0.8]
+    checkpoint = torch.load(tmp_path / "results" / "best.pt", weights_only=True)
+    assert checkpoint["epoch"] == 3

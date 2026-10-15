@@ -1,4 +1,4 @@
-"""Select a training plan on IDRiD train only, refit all 413, then evaluate 103."""
+"""Train IDRiD with our existing hybrid protocol, then evaluate the best model."""
 from __future__ import annotations
 
 import argparse
@@ -120,6 +120,7 @@ def build_components(cfg, device):
         "mmnp": WeightedSupervisedContrastiveOrdinalLoss(
             num_classes=5, temperature=1.0, margin_scale=float(options["ordinal_margin_scale"]),
             square_ordinal_distance=False, reduction=options["mmnp_reduction"], objective="mmnp",
+            pair_reduction=options.get("mmnp_pair_reduction", "mean"),
         ),
     }
     parameters = list(model.parameters())
@@ -192,8 +193,8 @@ def selection_indices(frame, *, val_size, seed):
     return train_idx, val_idx, "sha256_grouped_class_coverage"
 
 
-def select_plan(frame, manifest, cfg, output, device):
-    """Never receives the official test frame or uses its labels for selection."""
+def fit(frame, manifest, cfg, output, device):
+    """Existing train_hybrid_ordinal protocol; official test data never enters training."""
     set_seed(int(cfg["seed"]))
     train_idx, val_idx, split_method = selection_indices(
         frame, val_size=float(cfg["split"]["val_size"]), seed=int(cfg["seed"]),
@@ -201,7 +202,7 @@ def select_plan(frame, manifest, cfg, output, device):
     training, validation = frame.iloc[train_idx].copy(), frame.iloc[val_idx].copy()
     if set(training["sha256"]) & set(validation["sha256"]):
         raise ValueError("Duplicate image contents cross the internal train/validation split.")
-    save_json(output / "selection_split.json", {
+    save_json(output / "training_split.json", {
         "train": training["sample_id"].tolist(), "validation": validation["sample_id"].tolist(),
         "method": split_method, "patient_grouping": "Unavailable in the public grading CSV; content groups are not patient IDs.",
     })
@@ -212,8 +213,9 @@ def select_plan(frame, manifest, cfg, output, device):
     phase = "phase1_joint" if margins is not None else "fixed"
     previous = None
     stable_epochs, bad_epochs, best_epoch = 0, 0, 0
-    best_key = (float("-inf"), float("-inf"))
-    best_val = None
+    best_val_rmse = float("inf")
+    best_val, best_train, best_margins = {}, {}, {}
+    freeze_reason = None
     history = []
     for epoch in range(1, int(cfg["train"]["epochs"]) + 1):
         learning_rates = [float(g["lr"]) for g in optimizer.param_groups]
@@ -224,82 +226,73 @@ def select_plan(frame, manifest, cfg, output, device):
         val_metrics = evaluate(model, val_loader, device, amp, cfg)
         if val_metrics.get("nonfinite_predictions", 0):
             raise FloatingPointError("Non-finite validation predictions.")
+        scheduler.step(float(val_metrics["rmse_loss"]))
+        if phase == "phase1_joint":
+            current = margins.margin_values().detach().clone()
+            change = float((current - previous).abs().max()) if previous is not None else None
+            stable_epochs = stable_epochs + 1 if change is not None and change <= float(cfg["loss"]["margin_convergence_tolerance"]) else 0
+            previous = current
+        current_margins = {
+            **margins_record(margins), "phase": phase, "freeze_reason": freeze_reason,
+            "stable_epochs": stable_epochs,
+        }
+        payload = {
+            "epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(), "config": cfg,
+            "ordinal_margins": margins.state_dict() if margins is not None else None,
+            "margin_state": current_margins, "train_metrics": train_metrics, "val_metrics": val_metrics,
+        }
+        save_checkpoint(output / "last.pt", payload)
+        improved = float(val_metrics["rmse_loss"]) < best_val_rmse
+        if improved:
+            best_val_rmse = float(val_metrics["rmse_loss"])
+            best_epoch, best_val, best_train, best_margins = epoch, val_metrics, train_metrics, current_margins
+            bad_epochs = 0
+            save_checkpoint(output / "best.pt", payload)
+            save_json(output / "best_metrics.json", {
+                "selection_metric": "val.rmse_loss", "epoch": best_epoch, "phase": phase,
+                "val_rmse_loss": best_val_rmse, "train": best_train, "val": best_val, "margins": best_margins,
+            })
+        else:
+            bad_epochs += 1
         record = {
             "epoch": epoch, "phase": phase, "learning_rates": learning_rates,
-            "train": train_metrics, "val": val_metrics, "margins": margins_record(margins),
+            "train": train_metrics, "val": val_metrics, "margins": current_margins, "is_best": improved,
         }
         history.append(record)
-        # Only phase-2 models are eligible when learnable margins are enabled.
-        if phase != "phase1_joint":
-            key = (float(val_metrics["accuracy"]), -float(val_metrics["mae"]))
-            if key > best_key:
-                best_key, best_epoch, best_val, bad_epochs = key, epoch, val_metrics, 0
-                save_checkpoint(output / "selection_best.pt", {
-                    "model": model.state_dict(), "epoch": epoch,
-                    "margins": margins.state_dict() if margins is not None else None,
-                })
-            else:
-                bad_epochs += 1
-        scheduler.step(float(val_metrics["mae"]))
         print(
-            f"selection epoch={epoch} phase={phase} {loss_breakdown(train_metrics, cfg)} "
-            f"val_accuracy={val_metrics['accuracy']:.4f} val_mae={val_metrics['mae']:.4f}"
+            f"epoch={epoch} phase={phase} {loss_breakdown(train_metrics, cfg)} "
+            f"val_rmse={val_metrics['rmse_loss']:.4f} val_accuracy={val_metrics['accuracy']:.4f} "
+            f"val_mae={val_metrics['mae']:.4f}"
         )
-        save_json(output / "selection_history.json", {"epochs": history})
+        save_json(output / "metrics_history.json", {"selection_metric": "val.rmse_loss", "epochs": history})
+        save_json(output / "metrics.json", {
+            "epoch": epoch, "best_epoch": best_epoch, "best_val_rmse_loss": best_val_rmse,
+            "best_train": best_train, "best_val": best_val, "best_margins": best_margins,
+            "train": train_metrics, "val": val_metrics, "margins": current_margins,
+        })
         if phase == "phase1_joint":
             options = cfg["loss"]
-            current = margins.margin_values().detach().clone()
-            change = float((current - previous).abs().max()) if previous is not None else float("inf")
-            stable_epochs = stable_epochs + 1 if change <= float(options["margin_convergence_tolerance"]) else 0
-            previous = current
             converged = epoch >= int(options["margin_phase1_min_epochs"]) and stable_epochs >= int(options["margin_convergence_patience"])
             if converged or epoch >= int(options["margin_phase1_max_epochs"]):
+                freeze_reason = "margin_converged" if converged else "max_phase1_epochs"
+                save_checkpoint(output / "phase1_last.pt", payload)
                 margins.freeze()
                 phase = "phase2_frozen"
                 optimizer.param_groups[0]["lr"] = float(cfg["train"]["lr"])
                 optimizer.param_groups[1]["lr"] = float(options["margin_lr"])
                 scheduler = build_scheduler(optimizer, cfg)
+                # Match the existing phase transition: restart checkpoint selection.
                 bad_epochs = 0
+                best_val_rmse, best_epoch = float("inf"), 0
+                best_val, best_train, best_margins = {}, {}, {}
+                print(f"Freezing margins and starting phase 2: {freeze_reason}")
         elif bad_epochs >= int(cfg["train"]["early_stopping_patience"]):
+            print(f"Early stopping after {bad_epochs} epochs without validation RMSE improvement.")
             break
     if not best_epoch:
         raise RuntimeError("No eligible checkpoint was selected; allow at least one phase-2 epoch.")
-    plan = {
-        "selection_metric": "internal_val.accuracy (higher); ties: internal_val.mae (lower)",
-        "best_epoch": best_epoch, "validation": best_val,
-        "epochs": [{k: row[k] for k in ("epoch", "phase", "learning_rates")} for row in history[:best_epoch]],
-    }
-    save_json(output / "training_plan.json", plan)
-    return plan
-
-
-def refit(frame, manifest, cfg, output, device, plan):
-    """Fresh model, full official train split, fixed epoch/freeze/LR plan; no test access."""
-    set_seed(int(cfg["seed"]))
-    train_loader = make_loader(frame, manifest, cfg, training=True)
-    model, margins, criteria, parameters, optimizer, scaler, amp = build_components(cfg, device)
-    history = []
-    for step in plan["epochs"]:
-        if margins is not None and step["phase"] == "phase2_frozen":
-            margins.freeze()
-        for group, lr in zip(optimizer.param_groups, step["learning_rates"]):
-            group["lr"] = lr
-        train_metrics = train_one_epoch(
-            model, train_loader, train_loader, optimizer, scaler, device, amp,
-            criteria, margins, parameters, cfg, step["epoch"],
-        )
-        history.append({**step, "train": train_metrics, "margins": margins_record(margins)})
-        save_json(output / "metrics_history.json", {"epochs": history})
-        print(
-            f"refit epoch={step['epoch']} phase={step['phase']} "
-            f"{loss_breakdown(train_metrics, cfg)} train_accuracy={train_metrics['accuracy']:.4f}"
-        )
-    save_checkpoint(output / "best.pt", {
-        "model": model.state_dict(), "epoch": plan["best_epoch"], "config": cfg,
-        "margins": margins.state_dict() if margins is not None else None,
-        "selection": "Final full-training refit of the internal-validation-selected epoch plan.",
-    })
-    return model, amp
+    return model, amp, {"best_epoch": best_epoch, "best_val_rmse_loss": best_val_rmse, "best_val": best_val}
 
 
 def test_metrics(predictions, labels):
@@ -371,7 +364,8 @@ def run(cfg, *, allow_synthetic=False):
     device = resolve_device(cfg["device"])
     print(
         f"Loss weights: PCOL={cfg['loss']['alpha']} SCOLw={cfg['loss']['beta']} "
-        f"RMSE={cfg['loss']['rmse_weight']} MMNP={cfg['loss']['mmnp_weight']}"
+        f"RMSE={cfg['loss']['rmse_weight']} MMNP={cfg['loss']['mmnp_weight']} "
+        f"MMNP pair_reduction={cfg['loss'].get('mmnp_pair_reduction', 'mean')}"
     )
     output.mkdir(parents=True, exist_ok=True)
     git_rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
@@ -379,14 +373,19 @@ def run(cfg, *, allow_synthetic=False):
         "config": cfg, "dataset": manifest, "git_commit": git_rev.stdout.strip(),
         "python": platform.python_version(), "torch": str(torch.__version__),
         "device": str(device), "synthetic_smoke_test": allow_synthetic,
-        "protocol": "internal train-only selection -> fresh full-train refit -> one official test evaluation",
+        "protocol": "existing hybrid training: internal validation RMSE -> best checkpoint -> official test; no full-train refit",
     })
-    plan = select_plan(frames["train"], manifest, cfg, output, device)
-    model, amp = refit(frames["train"], manifest, cfg, output, device, plan)
+    model, amp, summary = fit(frames["train"], manifest, cfg, output, device)
     # Validate serialization/reloading before the only official test evaluation.
     checkpoint = torch.load(output / "best.pt", map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model"], strict=True)
-    return evaluate_test(model, frames["test"], manifest, cfg, output, device, amp)
+    payload = evaluate_test(model, frames["test"], manifest, cfg, output, device, amp)
+    payload.update(summary, selection_metric="val.rmse_loss")
+    save_json(output / "evaluation_metrics.json", payload)
+    metrics = json.loads((output / "metrics.json").read_text(encoding="utf-8"))
+    metrics["test"] = payload["test"]
+    save_json(output / "metrics.json", metrics)
+    return payload
 
 
 def main():
