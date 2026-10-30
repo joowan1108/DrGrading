@@ -327,13 +327,20 @@ def compute_losses(
         + float(loss_cfg.get("rmse_weight", 1.0)) * rmse
         + float(loss_cfg.get("mmnp_weight", 1.0)) * mmnp
     )
-    return {
+    losses = {
         "total": total,
         "pcol": pcol,
         "scol": scol,
         "mmnp": mmnp,
         "rmse": rmse,
     }
+    if "classification" in criteria:
+        classification = criteria["classification"](regression_outputs["logits"], regression_targets.long())
+        losses["classification"] = classification
+        losses["total"] = total + float(loss_cfg.get("classification_weight", 0.0)) * classification
+    elif float(loss_cfg.get("classification_weight", 0.0)) != 0.0:
+        raise ValueError("classification_weight requires the Balanced Softmax head and criterion.")
+    return losses
 
 
 def assert_finite_losses(losses: dict[str, torch.Tensor], outputs: dict[str, torch.Tensor], targets: torch.Tensor) -> None:
@@ -383,6 +390,8 @@ def train_one_epoch(
         "mae",
         "mmnp_active_violation_rate",
     ]
+    if "classification" in criteria:
+        meter_names.append("classification")
     meters = {name: AverageMeter() for name in meter_names}
     mmnp_boundary_stats = None
     epoch_predictions: list[float] = []

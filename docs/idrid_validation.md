@@ -57,6 +57,59 @@ PCOL/SCOLw 0.1/0.1, RMSE/MMNP 1/2, random margin, 정규화/증강과 단계 설
 python scripts/smoke_test_idrid_fixed_iterations.py
 ```
 
+## 팀원 최종 모델 + Balanced Softmax로 동일한 IDRiD 실험
+
+원본 브랜치 `gem_no_spatial_0814_bs_ablation`의 `03fd7e0`을 확인하여,
+5-class 선형 classification head와 `CE(logits + log(class_counts), y)`를
+선택적으로 추가했다. 기존 모델/체크포인트 형식은 바꾸지 않으며 BS를 켠 모델만
+`classification_head.fc.*` 파라미터와 `logits` 출력을 추가한다.
+팀원 브랜치를 병합하거나 덮어쓰지 않고 현재 `learnable_dist`에서 실행한다.
+
+```bash
+git fetch origin
+git merge --ff-only origin/learnable_dist
+python scripts/train_idrid_balanced_softmax.py --device cuda
+```
+
+기본 설정은 `configs/hybrid_idrid_balanced_softmax.yaml`이다.
+원본 YAML의 PCOL/SCOLw 0.5/0.1, RMSE/MMNP 1/2와 BS 계수 0.1을 사용한다.
+이전 IDRiD 실행의 PCOL 계수는 0.1이었으므로, 이번 설정과의 차이는 BS 추가만이
+아니라 PCOL 계수 변화도 포함한다. BS만의 영향을 비교하려면 따로 설정 파일을
+복사하여 두 실행의 PCOL 계수까지 동일하게 맞춰야 한다.
+
+원본 브랜치에는 BS 계수 0.9를 사용하는 별도 ablation 스크립트도 있지만,
+해당 값이 최종 최적값이라는 결과 파일은 확인되지 않았다. 기본값을 임의로 0.9로
+간주하지 않는다. 팀원의 최종 선택이 0.9였다면 다음처럼 명시할 수 있다.
+
+```bash
+python scripts/train_idrid_balanced_softmax.py --device cuda --classification-weight 0.9
+```
+
+계수 변경 시 기본 결과 폴더도 바뀐다. 기본 0.1 실행은
+`checkpoints/hybrid_idrid_bs_w0p1_train_only_fixed22_gem_no_spatial_seed42/`에 저장한다.
+`balanced_softmax.json`과 checkpoint에는 실제 학습 클래스 개수, BS 계수,
+원본 브랜치/commit과 예측 방식을 기록한다. 학습 로그에는 `classification` 원래 값과
+가중 기여도를 함께 출력한다. 클래스 개수는 EyePACS나 test에서 가져오지 않고,
+**공식 train 중 test 동일 파일을 제외한 실제 학습 풀**에서 계산한다.
+
+모델은 EfficientNetV2-S + GeM, Spatial Attention 미사용이다. **원본 구현처럼
+BS는 보조 손실이며 최종 Accuracy/MAE는 회귀 출력을 반올림/제한하여 계산**한다.
+분류 head의 argmax로 평가 방식을 임의 변경하지 않는다. Class 0–4 정확도와
+`per_class_metrics.csv`도 동일하게 저장한다.
+
+데이터/학습 예산은 직전 IDRiD 실험에 맞춰 입력 224, train-only, 내부 검증 없음,
+22 updates/epoch × 500 epochs, margin lr=1e-3, Phase 1 최소 50/최대 100,
+학습 RMSE scheduler, 조기 종료 없음과 마지막 checkpoint 평가를 유지한다.
+원본 EyePACS의 입력 384, 100 epochs, margin lr=1e-5, Phase 1 20/30 및
+검증 기반 checkpoint 선택까지 그대로 재현하는 실험은 아니다.
+기존 데이터 준비 폴더를 재사용하고, 모델은 ImageNet 가중치에서 새로 학습한다.
+
+```bash
+python scripts/smoke_test_idrid_balanced_softmax.py
+```
+
+위 검사는 실제 모델을 합성 데이터에서 두 epoch만 실행하며 실제 IDRiD를 다운로드하지 않는다.
+
 ## 논문과 일치시키는 조건
 
 [CLOC 논문 §4.1–4.2 및 부록 A.4](https://arxiv.org/pdf/2504.17813)의

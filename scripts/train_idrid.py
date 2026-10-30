@@ -108,9 +108,19 @@ def make_loader(frame, manifest, cfg, *, training):
     return DataLoader(dataset, batch_size=int(data["batch_size"]), shuffle=False, **kwargs)
 
 
-def build_components(cfg, device):
-    model_cfg = {k: v for k, v in cfg["model"].items() if k != "num_classes"}
-    model = HybridOrdinalNet(**model_cfg).to(device)
+def build_components(cfg, device, *, classification_class_counts=None):
+    model_cfg = {k: v for k, v in cfg["model"].items() if k not in {"num_classes", "balanced_softmax"}}
+    balanced = bool(cfg["model"].get("balanced_softmax", False))
+    if balanced:
+        from eyepacs_hybrid_ordinal.balanced_softmax import BalancedSoftmaxHybridOrdinalNet, BalancedSoftmaxLoss
+
+        if classification_class_counts is None or len(classification_class_counts) != int(cfg["model"]["num_classes"]):
+            raise ValueError("Balanced Softmax requires class counts from the actual training pool.")
+        model = BalancedSoftmaxHybridOrdinalNet(num_classes=int(cfg["model"]["num_classes"]), **model_cfg).to(device)
+    else:
+        if float(cfg["loss"].get("classification_weight", 0.0)) != 0.0:
+            raise ValueError("Set model.balanced_softmax: true to use classification_weight.")
+        model = HybridOrdinalNet(**model_cfg).to(device)
     margins = build_learnable_margins(cfg, device)
     options = cfg["loss"]
     shared = dict(
@@ -129,6 +139,8 @@ def build_components(cfg, device):
             pair_reduction=options.get("mmnp_pair_reduction", "mean"),
         ),
     }
+    if balanced:
+        criteria["classification"] = BalancedSoftmaxLoss(classification_class_counts).to(device)
     parameters = list(model.parameters())
     optimizer = build_optimizer(parameters, cfg)
     if margins is not None:
@@ -153,6 +165,8 @@ def loss_breakdown(metrics, cfg):
         "pcol": cfg["loss"]["alpha"], "scol": cfg["loss"]["beta"],
         "rmse": cfg["loss"]["rmse_weight"], "mmnp": cfg["loss"]["mmnp_weight"],
     }
+    if "classification" in metrics:
+        weights["classification"] = cfg["loss"]["classification_weight"]
     parts = [f"loss={metrics['total']:.4f}"]
     for name, weight in weights.items():
         parts.append(f"{name}={metrics[name]:.4f}(weighted={float(weight) * metrics[name]:.4f})")

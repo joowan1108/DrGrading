@@ -39,7 +39,23 @@ def fit_all(
     }
     set_seed(int(cfg["seed"]))
     loader = hybrid.make_loader(training, manifest, cfg, training=True)
-    model, margins, criteria, parameters, optimizer, scaler, amp = hybrid.build_components(cfg, device)
+    component_options = {}
+    if cfg["model"].get("balanced_softmax", False):
+        class_counts = [int((training["_label"] == grade).sum()) for grade in range(int(cfg["model"]["num_classes"]))]
+        component_options["classification_class_counts"] = class_counts
+        balanced_metadata = {
+            "enabled": True, "class_counts": class_counts, "counts_source": "actual_training_pool_after_test_copy_exclusion",
+            "classification_weight": float(cfg["loss"]["classification_weight"]),
+            "prediction_source": "round_and_clip_regression_prediction_not_classification_argmax",
+            "source": cfg.get("provenance", {}),
+        }
+        run_metadata["balanced_softmax"] = balanced_metadata
+        save_json(output / "balanced_softmax.json", balanced_metadata)
+        print(
+            f"Balanced Softmax: weight={cfg['loss']['classification_weight']} | "
+            f"TRAIN-only class counts={class_counts} | final predictions=regression", flush=True,
+        )
+    model, margins, criteria, parameters, optimizer, scaler, amp = hybrid.build_components(cfg, device, **component_options)
     scheduler = hybrid.build_scheduler(optimizer, cfg)
     options = cfg["loss"]
     initial = hybrid.margins_record(margins)
@@ -137,10 +153,13 @@ def fit_all(
                     "No validation or early stopping.", flush=True,
                 )
     save_checkpoint(output / "final.pt", payload)
-    return model, amp, {
+    summary = {
         "final_epoch": epoch, "final_train": metrics, "margins": margin_state,
         "batches_per_epoch": len(loader), "optimizer_steps": epoch * len(loader),
     }
+    if "balanced_softmax" in run_metadata:
+        summary["balanced_softmax"] = run_metadata["balanced_softmax"]
+    return model, amp, summary
 
 
 @torch.no_grad()
