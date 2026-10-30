@@ -29,7 +29,14 @@ NOTICE = (
 )
 
 
-def fit_all(training, manifest, cfg, output, device):
+def fit_all(
+    training, manifest, cfg, output, device, *, protocol=PROTOCOL, official_test_used_for_training=True,
+):
+    """Train the supplied pool without validation; record its actual split protocol."""
+    run_metadata = {
+        "protocol": protocol, "official_test_used_for_training": official_test_used_for_training,
+        "evaluation_is_independent": not official_test_used_for_training,
+    }
     set_seed(int(cfg["seed"]))
     loader = hybrid.make_loader(training, manifest, cfg, training=True)
     model, margins, criteria, parameters, optimizer, scaler, amp = hybrid.build_components(cfg, device)
@@ -89,22 +96,21 @@ def fit_all(training, manifest, cfg, output, device):
             "scheduler": scheduler.state_dict(), "config": cfg,
             "ordinal_margins": margins.state_dict() if margins is not None else None,
             "margin_state": margin_state, "train_metrics": metrics,
-            "protocol": PROTOCOL, "official_test_used_for_training": True,
-            "evaluation_is_independent": False,
+            **run_metadata, "batches_per_epoch": len(loader), "optimizer_steps": epoch * len(loader),
         }
         save_checkpoint(output / "last.pt", payload)
         record = {
             "epoch": epoch, "phase": phase, "learning_rates": learning_rates,
             "train": metrics, "margins": margin_state,
+            "batches_per_epoch": len(loader), "optimizer_steps": epoch * len(loader),
         }
         history.append(record)
         save_json(output / "metrics_history.json", {
-            "protocol": PROTOCOL, "scheduler_metric": "train.rmse",
+            **run_metadata, "scheduler_metric": "train.rmse",
             "checkpoint_selection": "final_epoch", "epochs": history,
         })
         save_json(output / "metrics.json", {
-            **record, "protocol": PROTOCOL, "checkpoint_selection": "final_epoch",
-            "official_test_used_for_training": True, "evaluation_is_independent": False,
+            **record, **run_metadata, "checkpoint_selection": "final_epoch",
         })
         print(
             f"epoch={epoch} phase={phase} {hybrid.loss_breakdown(metrics, cfg)} "
@@ -131,7 +137,10 @@ def fit_all(training, manifest, cfg, output, device):
                     "No validation or early stopping.", flush=True,
                 )
     save_checkpoint(output / "final.pt", payload)
-    return model, amp, {"final_epoch": epoch, "final_train": metrics, "margins": margin_state}
+    return model, amp, {
+        "final_epoch": epoch, "final_train": metrics, "margins": margin_state,
+        "batches_per_epoch": len(loader), "optimizer_steps": epoch * len(loader),
+    }
 
 
 @torch.no_grad()
@@ -172,6 +181,7 @@ def evaluate_seen_test(model, frame, manifest, cfg, output, device, amp):
         f"IDRiD TRAIN-SEEN test subset (NOT independent): Accuracy={metrics['accuracy_percent']:.2f}% "
         f"MAE={metrics['mae']:.4f} N={metrics['samples']}", flush=True,
     )
+    hybrid.report_per_class(metrics, output, split_label="TRAIN-SEEN test")
     return payload
 
 

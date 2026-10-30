@@ -5,6 +5,58 @@ Two-phase Learning, GeM)을 IDRiD에서 새로 학습한다. 현재 IDRiD 설정
 사용자 요청에 따라 Spatial Attention을 끈다. 이전 실행의 저장 설정/결과는 변경하지 않는다.
 EyePACS 체크포인트를 그대로 평가하는 zero-shot 외부 검증과는 다른 실험이다.
 
+## 현재 실행: 테스트 제외 + 업데이트 횟수 유지 + 클래스별 정확도
+
+`scripts/train_idrid_fixed_iterations.py`와
+`configs/hybrid_idrid_fixed_iterations_no_spatial.yaml`이 현재 요청에 맞는 실행이다.
+공식 train 413장만 학습에 사용하고 **test 103장은 마지막 평가에만 사용**한다.
+공식 분할 간 SHA-256이 일치하는 파일이 있으면 **학습 쪽의 사본만 제외**한다.
+예를 들어 train 한 장이 test와 같으면 학습은 412장, 평가는 여전히 103장이다.
+`training_split.json`에 제외한 학습 ID와 실제 개수를 기록하며 환자 단위 독립성까지
+보장하는 것은 아니다. 원본 이미지/CSV와 기존 실험 결과를 삭제하거나 변경하지 않는다.
+
+```bash
+git fetch origin
+git merge --ff-only origin/learnable_dist
+python scripts/train_idrid_fixed_iterations.py --device cuda
+```
+
+기존 train+test 516장 실행은 배치 크기 24에서 `ceil(516/24)=22`회/epoch였다.
+새 실행은 `data.train_batches_per_epoch: 22`로 **같은 22회/epoch, 500 epochs,
+총 11,000회 미니배치 업데이트**를 유지한다. 적은 학습 영상에서 필요한 만큼 반복
+샘플링하며 test 영상으로 빈자리를 채우지 않는다. epoch마다 모든 학습 영상을 정확히
+한 번 사용하는 방식은 아니다. `metrics_history.json`과 checkpoint에 누적
+`optimizer_steps`와 `batches_per_epoch`를 저장한다. Phase 1 종료 시점 자체는 기존과
+같은 수렴 조건을 사용하므로 새 데이터에 따라 달라질 수 있다.
+
+EfficientNetV2-S + GeM(Spatial Attention 미사용), ImageNet 초기화,
+PCOL/SCOLw 0.1/0.1, RMSE/MMNP 1/2, random margin, 정규화/증강과 단계 설정은
+직전 실행과 동일하다. **내부 검증 없이** 학습 RMSE로 scheduler를 조정하고,
+조기 종료 없이 마지막 `final.pt`를 다시 읽어 test를 한 번 평가한다.
+과거 train+test로 학습한 IDRiD checkpoint를 이어서 사용하지 않는다.
+
+전체 Accuracy/MAE와 **Class 0, 1, 2, 3, 4의 정확도 및 정답 수/표본 수**를 콘솔에
+출력한다. 클래스별 정확도는 해당 정답 클래스의 표본 중 맞힌 비율(recall)이며,
+클래스 precision과는 다르며, 전체 Accuracy는 클래스별 정확도의 단순 평균이 아니라
+전체 정답 수/N이다.
+
+- `evaluation_metrics.json`: `test.per_class["0".."4"]`의 `accuracy`(0–1),
+  `accuracy_percent`(0–100), `correct_count`, `support`, `mae`.
+- `per_class_metrics.csv`: 다섯 클래스의 결과를 각각 한 행으로 저장.
+- `predictions.csv`: test 103장의 개별 예측. 학습과의 파일 내용 중복은 없어야 한다.
+- 기본 결과 폴더: `checkpoints/hybrid_idrid_train_only_fixed22_gem_no_spatial_seed42/`.
+
+이전 실험에서 이미 test를 학습/확인한 이력은 새 실행으로 지워지지 않는다.
+이번 실행의 학습에서 test를 제외한 결과이며, 최종 일반화 주장에는 별도의
+미사용 데이터 검증이 필요할 수 있다. 이전 전체 데이터 스크립트는 과거 진단 실험을
+보존하기 위해 남겨두며, 지금은 위 **fixed_iterations** 스크립트를 사용한다.
+
+다운로드 없는 실제 모델 동작 검사:
+
+```bash
+python scripts/smoke_test_idrid_fixed_iterations.py
+```
+
 ## 논문과 일치시키는 조건
 
 [CLOC 논문 §4.1–4.2 및 부록 A.4](https://arxiv.org/pdf/2504.17813)의

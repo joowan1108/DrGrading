@@ -72,8 +72,9 @@ def load_prepared(data_dir: Path, *, allow_synthetic: bool = False):
         if manifest.get("overlap_policy", "error") != "report":
             raise ValueError("Train/test image-content overlap; rerun prepare_idrid.py --overlap-policy report to disclose and preserve it.")
         warnings.warn(
-            f"{overlap_count} test images also occur in training. Full-test metrics include "
-            "these duplicates; train-overlap-excluded metrics will also be reported.", UserWarning,
+            f"{overlap_count} test images also occur in training in the supplied split. "
+            "The default protocol reports full and overlap-excluded test metrics; "
+            "the train-only fixed-iteration protocol removes these copies from training.", UserWarning,
         )
     manifest["duplicate_summary"] = audit["summary"]
     train_hashes = set(frames["train"]["sha256"])
@@ -94,9 +95,14 @@ def make_loader(frame, manifest, cfg, *, training):
     workers = worker_count(int(data["num_workers"]))
     kwargs = dict(num_workers=workers, pin_memory=torch.cuda.is_available(), persistent_workers=workers > 0)
     if training:
+        num_batches = data.get("train_batches_per_epoch")
+        if num_batches is not None and (
+            isinstance(num_batches, bool) or not isinstance(num_batches, int) or num_batches < 1
+        ):
+            raise ValueError("train_batches_per_epoch must be a positive integer or null.")
         sampler = ClassStratifiedBatchSampler(
             dataset.targets, batch_size=int(data["batch_size"]), seed=int(cfg["seed"]),
-            min_samples_per_class=2,
+            min_samples_per_class=2, num_batches=num_batches,
         )
         return DataLoader(dataset, batch_sampler=sampler, **kwargs)
     return DataLoader(dataset, batch_size=int(data["batch_size"]), shuffle=False, **kwargs)
@@ -350,11 +356,31 @@ def test_metrics(predictions, labels):
     confusion = np.zeros((5, 5), dtype=int)
     np.add.at(confusion, (np.asarray(labels), classes), 1)
     metrics.update(samples=len(labels), accuracy_percent=100 * metrics["accuracy"], confusion_matrix=confusion.tolist())
+    for stats in metrics["per_class"].values():
+        stats["accuracy_percent"] = None if stats["accuracy"] is None else 100 * stats["accuracy"]
     return metrics
 
 
+def report_per_class(metrics, output, *, split_label="test"):
+    """Report class recall (correct / true-class support), not class precision."""
+    with (output / "per_class_metrics.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["class", "support", "correct_count", "accuracy", "accuracy_percent", "mae"])
+        for grade in range(5):
+            stats = metrics["per_class"][str(grade)]
+            percent = stats["accuracy_percent"]
+            writer.writerow([
+                grade, stats["support"], stats["correct_count"], stats["accuracy"], percent, stats["mae"],
+            ])
+            display = "N/A" if percent is None else f"{percent:.2f}%"
+            print(
+                f"{split_label} Class {grade}: Accuracy={display} "
+                f"({stats['correct_count']}/{stats['support']})", flush=True,
+            )
+
+
 @torch.no_grad()
-def evaluate_test(model, frame, manifest, cfg, output, device, amp):
+def evaluate_test(model, frame, manifest, cfg, output, device, amp, *, checkpoint_name="best.pt"):
     loader = make_loader(frame, manifest, cfg, training=False)
     model.eval()
     predictions, labels, ids = [], [], []
@@ -371,7 +397,7 @@ def evaluate_test(model, frame, manifest, cfg, output, device, amp):
     overlap = frame.set_index("_image_id")["_overlaps_train"].loc[ids].to_numpy(dtype=bool)
     filtered_metrics = test_metrics(np.asarray(predictions)[~overlap], np.asarray(labels)[~overlap])
     payload = {
-        "dataset": "IDRiD", "split": "official_test", "checkpoint": "best.pt",
+        "dataset": "IDRiD", "split": "official_test", "checkpoint": checkpoint_name,
         "synthetic_smoke_test": not manifest["official_split_verified"],
         "accuracy_definition": "correct discrete grade predictions / N (micro accuracy)",
         "mae_definition": "mean(abs(round_and_clip(prediction, 0, 4) - true_grade))",
@@ -394,6 +420,7 @@ def evaluate_test(model, frame, manifest, cfg, output, device, amp):
         writer.writerow(["image", "label", "prediction_continuous", "prediction_class", "absolute_error", "overlaps_train"])
         writer.writerows((i, y, p, int(c), abs(int(c) - y), bool(o)) for i, y, p, c, o in zip(ids, labels, predictions, classes, overlap))
     print(f"IDRiD full test: Accuracy={metrics['accuracy_percent']:.2f}% MAE={metrics['mae']:.4f} N={len(labels)} train_overlaps={int(overlap.sum())}")
+    report_per_class(metrics, output)
     if filtered_metrics is not None:
         print(f"Test excluding train overlaps: Accuracy={filtered_metrics['accuracy_percent']:.2f}% MAE={filtered_metrics['mae']:.4f} N={filtered_metrics['samples']}")
     else:
