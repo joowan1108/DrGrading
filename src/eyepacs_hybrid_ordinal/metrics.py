@@ -4,7 +4,7 @@ from collections import defaultdict
 
 import numpy as np
 import torch
-from sklearn.metrics import cohen_kappa_score
+from sklearn.metrics import cohen_kappa_score, silhouette_score
 
 from .ordinal_metrics import ordinal_error_distribution
 
@@ -35,6 +35,87 @@ def batch_metrics(predictions: torch.Tensor, targets: torch.Tensor, num_classes:
     continuous_mae = torch.abs(safe_predictions - targets.float()).mean().item()
     nonfinite_rate = 1.0 - finite_mask.float().mean().item()
     return {"accuracy": accuracy, "mae": mae, "continuous_mae": continuous_mae, "nonfinite_prediction_rate": nonfinite_rate}
+
+
+def embedding_separation_metrics(embeddings, targets) -> dict[str, object]:
+    embedding_array = np.asarray(embeddings, dtype=np.float64)
+    target_array = np.asarray(targets, dtype=np.int64)
+    if embedding_array.ndim != 2 or len(embedding_array) != len(target_array):
+        raise ValueError("embeddings must be a 2D array aligned with targets.")
+    if len(target_array) < 2:
+        raise ValueError("At least two samples are required.")
+
+    labels = np.unique(target_array)
+    centroids = {
+        int(label): embedding_array[target_array == label].mean(axis=0)
+        for label in labels
+    }
+    intra_by_class = {
+        str(label): {
+            "support": int((target_array == label).sum()),
+            "mean_euclidean_to_centroid": float(
+                np.linalg.norm(
+                    embedding_array[target_array == label] - centroids[int(label)],
+                    axis=1,
+                ).mean()
+            ),
+        }
+        for label in labels
+    }
+    intra_distances = np.concatenate(
+        [
+            np.linalg.norm(
+                embedding_array[target_array == label] - centroids[int(label)],
+                axis=1,
+            )
+            for label in labels
+        ]
+    )
+
+    centroid_distances = {}
+    inter_euclidean = []
+    inter_cosine = []
+    for index, left_label in enumerate(labels):
+        for right_label in labels[index + 1 :]:
+            left = centroids[int(left_label)]
+            right = centroids[int(right_label)]
+            euclidean = float(np.linalg.norm(left - right))
+            denominator = float(np.linalg.norm(left) * np.linalg.norm(right))
+            cosine = (
+                float(1.0 - np.clip(np.dot(left, right) / denominator, -1.0, 1.0))
+                if denominator > 0
+                else None
+            )
+            centroid_distances[f"{left_label}-{right_label}"] = {
+                "euclidean": euclidean,
+                "cosine": cosine,
+            }
+            inter_euclidean.append(euclidean)
+            if cosine is not None:
+                inter_cosine.append(cosine)
+
+    mean_intra = float(intra_distances.mean())
+    mean_inter = float(np.mean(inter_euclidean)) if inter_euclidean else None
+    silhouette = (
+        float(silhouette_score(embedding_array, target_array, metric="euclidean"))
+        if 1 < len(labels) < len(target_array)
+        else None
+    )
+    return {
+        "sample_count": int(len(target_array)),
+        "embedding_dimension": int(embedding_array.shape[1]),
+        "class_centroid_distances": centroid_distances,
+        "intra_class": intra_by_class,
+        "mean_intra_class_euclidean_distance": mean_intra,
+        "mean_inter_class_centroid_euclidean_distance": mean_inter,
+        "mean_inter_class_centroid_cosine_distance": (
+            float(np.mean(inter_cosine)) if inter_cosine else None
+        ),
+        "inter_to_intra_euclidean_ratio": (
+            mean_inter / mean_intra if mean_inter is not None and mean_intra > 0 else None
+        ),
+        "silhouette_score_euclidean": silhouette,
+    }
 
 
 def aggregate_predictions(

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from eyepacs_hybrid_ordinal.ordinal_metrics import ordinal_error_distribution
-from eyepacs_hybrid_ordinal.metrics import aggregate_predictions
+from eyepacs_hybrid_ordinal.metrics import aggregate_predictions, embedding_separation_metrics
 
 
 def test_ordinal_error_distribution_separates_error_distances() -> None:
@@ -58,3 +58,16 @@ def test_aggregate_predictions_keeps_global_and_per_class_ordinal_metrics() -> N
     assert result["per_class"]["1"]["accuracy"] == 0.0
     assert result["per_class"]["1"]["adjacent_rate"] == 1.0
     assert result["per_class"]["4"]["non_adjacent_rate"] == 1.0
+
+
+def test_embedding_separation_metrics_uses_original_embedding_space() -> None:
+    result = embedding_separation_metrics(
+        embeddings=[[0.0, 0.0], [0.0, 2.0], [10.0, 0.0], [10.0, 2.0]],
+        targets=[0, 0, 1, 1],
+    )
+
+    assert result["class_centroid_distances"]["0-1"]["euclidean"] == 10.0
+    assert result["mean_intra_class_euclidean_distance"] == 1.0
+    assert result["mean_inter_class_centroid_euclidean_distance"] == 10.0
+    assert result["inter_to_intra_euclidean_ratio"] == 10.0
+    assert result["silhouette_score_euclidean"] > 0.8

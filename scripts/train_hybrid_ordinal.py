@@ -24,7 +24,11 @@ from eyepacs_hybrid_ordinal.losses import (
     WeightedSupervisedContrastiveOrdinalLoss,
     rmse_loss,
 )
-from eyepacs_hybrid_ordinal.metrics import aggregate_predictions, batch_metrics
+from eyepacs_hybrid_ordinal.metrics import (
+    aggregate_predictions,
+    batch_metrics,
+    embedding_separation_metrics,
+)
 from eyepacs_hybrid_ordinal.models import HybridOrdinalNet, load_model_checkpoint
 from eyepacs_hybrid_ordinal.splitting import build_nested_split_indices
 from eyepacs_hybrid_ordinal.transforms import make_eval_transform, make_train_transform
@@ -602,6 +606,12 @@ def save_outer_test_tsne(
     figure.savefig(image_path, dpi=200)
     plt.close(figure)
 
+    embedding_metrics_path = output_dir / f"{file_stem}_embedding_metrics.json"
+    save_json(
+        embedding_metrics_path,
+        embedding_separation_metrics(embeddings, targets),
+    )
+
     return {
         "embedding": "l2_normalized_pcol_scol_concat",
         "samples": sample_count,
@@ -609,6 +619,7 @@ def save_outer_test_tsne(
         "random_state": seed,
         "image_file": image_path.name,
         "coordinates_file": csv_path.name,
+        "embedding_metrics_file": embedding_metrics_path.name,
     }
 
 

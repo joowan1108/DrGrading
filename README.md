@@ -129,8 +129,11 @@ reports exact and adjacent predictions together. These values and their
 per-class breakdowns are written to each fold's `metrics.json` and aggregated
 across folds in `cross_validation_metrics.json`.
 
-The separate MMNP term uses the SCOL embedding and applies a CLOC-style hinge
-over every positive-negative pair for each anchor. PCOL and SCOLw keep their
+The separate MMNP term uses the SCOL embedding and sums the hinge losses
+over every positive-negative pair for each anchor, as in CLOC Eq. (2), using
+raw cumulative margins without squaring. `mmnp_reduction: mean` averages these
+anchor sums; `sum` adds them. Loss magnitude therefore grows with the number
+of comparisons per anchor. PCOL and SCOLw keep their
 baseline log-sum-exp forms and use detached cumulative margins. Global and
 per-boundary MMNP active violation rates, comparison counts, and mean hinge
 losses are recorded during training. MMNP uses raw cosine similarities, so
