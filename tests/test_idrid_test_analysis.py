@@ -173,3 +173,56 @@ def test_seen_test_checkpoint_cannot_be_relabelled_as_heldout_analysis(tmp_path)
     torch.save({"official_test_used_for_training": True}, tmp_path / "final.pt")
     with pytest.raises(ValueError, match="TRAIN-SEEN checkpoint"):
         posthoc.run(tmp_path)
+
+
+def test_wrong_run_folder_has_an_actionable_error_before_loading_torch(tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):pytest.fail("Do not load a checkpoint for a nonexistent run folder.")
+    monkeypatch.setattr(posthoc.torch, "load", forbidden)
+    with pytest.raises(FileNotFoundError, match="ACTUAL training output folder") as caught:
+        posthoc.run(tmp_path / "example_name")
+    assert "--list-runs" in str(caught.value)
+
+
+def test_incomplete_training_is_explained_without_substituting_last_checkpoint(tmp_path, monkeypatch):
+    (tmp_path / "last.pt").write_bytes(b"not a model; must never be loaded")
+    save_json(tmp_path / "run_config.json", {"config": {"train": {"epochs": 500}}})
+    save_json(tmp_path / "metrics.json", {"epoch": 120})
+    def forbidden(*args, **kwargs):pytest.fail("An intermediate last.pt must not substitute for final.pt.")
+    monkeypatch.setattr(posthoc.torch, "load", forbidden)
+    with pytest.raises(FileNotFoundError, match="120/500") as caught:
+        posthoc.run(tmp_path)
+    assert "unfinished or interrupted" in str(caught.value)
+    assert "do not rename" in str(caught.value)
+
+
+def test_best_checkpoint_is_not_silently_treated_as_final(tmp_path):
+    (tmp_path / "best.pt").write_bytes(b"not the final-epoch protocol")
+    with pytest.raises(FileNotFoundError, match="validation-selected best.pt"):
+        posthoc.run(tmp_path)
+
+
+def test_list_runs_reports_actual_paths_status_and_commands_without_loading_models(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "checkpoints"
+    ready = root / "idrid bs actual run"
+    pending = root / "idrid_pending"
+    seen = root / "idrid_all_data"
+    for folder in [ready, pending, seen]:folder.mkdir(parents=True)
+    (ready / "final.pt").write_bytes(b"listing must not load this")
+    (seen / "final.pt").write_bytes(b"listing must not load this either")
+    (pending / "last.pt").write_bytes(b"unfinished model")
+    save_json(ready / "run_config.json", {"official_test_used_for_training": False})
+    save_json(pending / "run_config.json", {"config": {"train": {"epochs": 500}}})
+    save_json(pending / "metrics.json", {"epoch": 120})
+    save_json(seen / "run_config.json", {"official_test_used_for_training": True})
+    analysis = ready / "test_analysis";analysis.mkdir()
+    save_json(analysis / "run_config.json", {"training_performed": False})
+    def forbidden(*args, **kwargs):pytest.fail("Listing must not deserialize model weights.")
+    monkeypatch.setattr(posthoc.torch, "load", forbidden)
+    records = posthoc.list_runs(root)
+    assert len(records) == 3
+    by_path = {record["run_dir"]: record for record in records}
+    assert str(ready) in by_path[str(ready)]["command"]
+    assert "120/500" in by_path[str(pending)]["status"]
+    assert "command" not in by_path[str(pending)] and "command" not in by_path[str(seen)]
+    text = capsys.readouterr().out
+    assert "FINAL FOUND" in text and "NO FINAL" in text and "TRAIN-SEEN" in text

@@ -177,20 +177,29 @@ PCOL/SCOL 출력을 각각 L2 정규화한 뒤 연결한 특징을 사용하며,
 
 ### 이미 학습이 끝났거나 이전 코드로 학습 중인 경우
 
-기존 학습을 다시 시작하거나 prepare할 필요가 없다. 현재 학습이 `final.pt`를
-저장한 후 다음 명령으로 **평가만** 실행한다. 저장된 모델 설정과 학습/test 목록을
-읽고, checkpoint를 그대로 재로딩한다. ImageNet 가중치도 다시 받지 않는다.
+기존 학습을 다시 시작하거나 prepare할 필요가 없다. 먼저 **실제 학습 결과 폴더**를
+찾는다. 아래 명령은 모델을 로딩하거나 학습하지 않고, 결과 폴더와 checkpoint 상태를
+출력한다. `FINAL FOUND` 폴더에는 해당 경로를 넣은 평가 명령도 함께 표시한다.
 
 ```bash
 git pull --ff-only origin learnable_dist
-python scripts/evaluate_idrid_test.py \
-  --run-dir checkpoints/idrid_heldout_audited_seed42_run01 \
-  --device cuda
-python scripts/report_idrid_test.py \
-  checkpoints/idrid_heldout_audited_seed42_run01/test_analysis
+python scripts/evaluate_idrid_test.py --list-runs
 ```
 
-`--run-dir`에는 실제 기존 결과 폴더를 지정한다. 기본 출력은 그 폴더 안의
+기본 BS 결과 폴더는
+`checkpoints/hybrid_idrid_bs_w0p1_train_only_fixed22_gem_no_spatial_audited_seed42/`이다.
+과거 실행은 이름에 `audited`가 없을 수도 있다.
+`idrid_heldout_audited_seed42_run01`은 학습 때 `--output-dir`로 해당 이름을 지정한
+경우에만 생기는 예시 이름이며, 모든 실행에 공통으로 존재하는 폴더가 아니다.
+
+`--list-runs`에서 출력한 실제 경로의 명령으로 **평가만** 실행한다. 현재 학습이
+아직 `last.pt`만 저장했다면 `NO FINAL`과 마지막 기록 epoch가 표시된다.
+`final.pt`는 설정한 마지막 epoch 뒤에 저장되므로 학습 완료 또는 중단 여부를 확인한다.
+중간 `last.pt`나 다른 validation 프로토콜의 `best.pt`를 `final.pt`로 바꾸어 쓰지 않는다.
+결과 폴더를 다른 곳에 저장했다면 `--list-runs --search-root /실제/checkpoints`로 찾는다.
+
+평가 명령은 저장된 모델 설정과 학습/test 목록을 읽고 checkpoint를 그대로 재로딩한다.
+ImageNet 가중치도 다시 받지 않는다. 기본 출력은 그 폴더 안의
 `test_analysis/`이며 원래 checkpoint/지표를 덮어쓰지 않는다.
 이미 분석한 폴더가 있으면 `--output-dir checkpoints/idrid_test_analysis_run02`처럼
 새 경로를 지정한다. BS 모델도 checkpoint의 설정으로 자동 구성한다.

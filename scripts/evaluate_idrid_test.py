@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import shlex
 from pathlib import Path
 
 import torch
@@ -11,6 +12,88 @@ import torch
 import train_idrid as hybrid
 from eyepacs_hybrid_ordinal.models import HybridOrdinalNet, clean_state_dict_keys
 from eyepacs_hybrid_ordinal.utils import resolve_device, save_json
+
+
+def read_run_json(path):
+    """Read optional status metadata without loading a large checkpoint."""
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def final_checkpoint_path(run_dir):
+    """Explain an incorrect folder or unfinished run before calling torch.load."""
+    hint = "List existing runs with: python scripts/evaluate_idrid_test.py --list-runs"
+    if not run_dir.is_dir():
+        raise FileNotFoundError(
+            f"Run directory does not exist: {run_dir}\n"
+            f"--run-dir must be the ACTUAL training output folder, not an example name. {hint}"
+        )
+    path = run_dir / "final.pt"
+    if path.is_file():
+        return path
+    message = f"final.pt is missing in {run_dir}. "
+    if (run_dir / "last.pt").is_file():
+        saved = read_run_json(run_dir / "run_config.json")
+        epoch = read_run_json(run_dir / "metrics.json").get("epoch", "unknown")
+        planned = saved.get("config", {}).get("train", {}).get("epochs", "unknown")
+        message += (
+            f"last.pt exists (recorded epoch {epoch}/{planned}); training may be unfinished or interrupted. "
+            "final.pt is written only after the final epoch; do not rename an intermediate last.pt. "
+        )
+    elif (run_dir / "best.pt").is_file():
+        message += "This folder has a validation-selected best.pt from a different protocol; this runner requires a train-only final.pt. "
+    else:
+        message += "Verify the actual output folder and training completion. "
+    raise FileNotFoundError(message + hint)
+
+
+def list_runs(search_root):
+    """List existing IDRiD folders and print exact commands for final checkpoints."""
+    search_root = search_root.resolve()
+    if not search_root.is_dir():
+        print(f"Checkpoint directory does not exist: {search_root}")
+        return []
+    folders = set()
+    for name in ("run_config.json", "final.pt", "last.pt", "best.pt"):
+        folders.update(path.parent for path in search_root.rglob(name))
+    records = []
+    for folder in sorted(folders):
+        saved = read_run_json(folder / "run_config.json")
+        if saved.get("training_performed") is False:
+            continue
+        cfg = saved.get("config", {})
+        data_dir = str(cfg.get("data", {}).get("data_dir", ""))
+        relative_name = str(folder.relative_to(search_root))
+        if "idrid" not in relative_name.lower() and "idrid" not in data_dir.lower():
+            continue
+        seen = saved.get("official_test_used_for_training") is True
+        if seen:
+            status = "TRAIN-SEEN: not eligible for held-out analysis"
+        elif (folder / "final.pt").is_file():
+            status = "FINAL FOUND: checkpoint protocol will be verified on evaluation"
+        elif (folder / "last.pt").is_file():
+            epoch = read_run_json(folder / "metrics.json").get("epoch", "unknown")
+            planned = cfg.get("train", {}).get("epochs", "unknown")
+            status = f"NO FINAL: last checkpoint at {epoch}/{planned}; unfinished/interrupted"
+        elif (folder / "best.pt").is_file():
+            status = "BEST ONLY: different validation-selected protocol"
+        else:
+            status = "NO CHECKPOINT: setup only or training has not saved a model"
+        print(f"\n{folder}\n  {status}")
+        record = {"run_dir": str(folder), "status": status}
+        if not seen and (folder / "final.pt").is_file():
+            command = f"python scripts/evaluate_idrid_test.py --run-dir {shlex.quote(str(folder))} --device cuda"
+            record["command"] = command
+            print(f"  {command}")
+        records.append(record)
+    if not records:
+        print(f"No IDRiD runs found under {search_root}; use --search-root /actual/checkpoints/path if needed.")
+    return records
 
 
 def build_evaluation_model(cfg, device):
@@ -26,7 +109,7 @@ def build_evaluation_model(cfg, device):
 
 def run(run_dir: Path, *, data_dir=None, output_dir=None, device=None, num_workers=None, allow_synthetic=False):
     run_dir = run_dir.resolve()
-    checkpoint_path = run_dir / "final.pt"
+    checkpoint_path = final_checkpoint_path(run_dir)
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     if checkpoint.get("official_test_used_for_training") is not False:
         raise ValueError("This checkpoint does not establish train-only training; a TRAIN-SEEN checkpoint cannot be relabelled as held-out test.")
@@ -98,13 +181,27 @@ def run(run_dir: Path, *, data_dir=None, output_dir=None, device=None, num_worke
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-dir", required=True, type=Path, help="Existing IDRiD run with final.pt, run_config.json and training_split.json")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--run-dir", type=Path, help="ACTUAL training output folder containing final.pt and training metadata")
+    action.add_argument("--list-runs", action="store_true", help="List existing run folders, checkpoint status and evaluation commands; no training/evaluation")
+    parser.add_argument("--search-root", type=Path, help="Checkpoint tree for --list-runs; default: this repository's checkpoints/")
     parser.add_argument("--data-dir", type=Path, help="Override prepared-data location if needed")
     parser.add_argument("--output-dir", type=Path, help="Default: RUN_DIR/test_analysis; must be empty")
     parser.add_argument("--device")
     parser.add_argument("--num-workers", type=int)
     args = parser.parse_args()
-    run(**vars(args))
+    if args.list_runs:
+        list_runs(args.search_root or hybrid.ROOT / "checkpoints")
+        return
+    if args.search_root is not None:
+        parser.error("--search-root is only used with --list-runs.")
+    options = vars(args)
+    options.pop("list_runs")
+    options.pop("search_root")
+    try:
+        run(**options)
+    except (OSError, ValueError, KeyError) as error:
+        parser.exit(2, f"IDRiD ANALYSIS ERROR: {error}\n")
 
 
 if __name__ == "__main__":
