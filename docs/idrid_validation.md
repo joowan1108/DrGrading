@@ -1,403 +1,172 @@
-# IDRiD 추가 데이터 실험
+# IDRiD 학습과 공식 test 최종 평가
 
-현재 Hybrid 모델(EfficientNetV2-S, PCOL/SCOLw/RMSE, 학습 가능한 간격,
-Two-phase Learning, GeM)을 IDRiD에서 새로 학습한다. 현재 IDRiD 설정에서는
-사용자 요청에 따라 Spatial Attention을 끈다. 이전 실행의 저장 설정/결과는 변경하지 않는다.
-EyePACS 체크포인트를 그대로 평가하는 zero-shot 외부 검증과는 다른 실험이다.
+이번 실험은 **IDRiD train에서 새로 학습하고 IDRiD test에서 최종 평가**한다.
+EyePACS checkpoint를 그대로 적용하는 외부 검증과는 다른 실험이다.
+내부 validation은 만들지 않으며, 공식 test는 gradient 갱신, scheduler,
+epoch 선택 또는 checkpoint 선택에 사용하지 않는다.
 
-## 현재 실행: 테스트 제외 + 업데이트 횟수 유지 + 클래스별 정확도
+## 높은 정확도를 읽기 전에 확인할 사항
 
-`scripts/train_idrid_fixed_iterations.py`와
-`configs/hybrid_idrid_fixed_iterations_no_spatial.yaml`이 현재 요청에 맞는 실행이다.
-공식 train 413장만 학습에 사용하고 **test 103장은 마지막 평가에만 사용**한다.
-공식 분할 간 SHA-256이 일치하는 파일이 있으면 **학습 쪽의 사본만 제외**한다.
-예를 들어 train 한 장이 test와 같으면 학습은 412장, 평가는 여전히 103장이다.
-`training_split.json`에 제외한 학습 ID와 실제 개수를 기록하며 환자 단위 독립성까지
-보장하는 것은 아니다. 원본 이미지/CSV와 기존 실험 결과를 삭제하거나 변경하지 않는다.
+- `metrics.json`의 `train.accuracy`, `final_train.accuracy`와 epoch의
+  `train_accuracy`는 **학습 정확도**다. 413장 정도의 데이터에 장기 학습하면 매우
+  높아질 수 있으며 이를 test 성능으로 보고하면 안 된다.
+- 과거 `train_idrid_all_data.py`는 train 413장과 test 103장을 합친 516개 행을
+  학습한 뒤 **같은 test 103장**을 재평가했다. `seen_test`의 높은 점수는
+  resubstitution이며 독립 test 결과가 아니다.
+- `train_idrid_fixed_iterations.py`는 원래부터 train-only였다. 높은 수치라는
+  이유만으로 이 runner가 test로 학습했다고 결론 내릴 수는 없다. 원격 실행의
+  `run_config.json`, `training_split.json`, `evaluation_metrics.json`으로 판별해야 한다.
 
-```bash
-git fetch origin
-git merge --ff-only origin/learnable_dist
-python scripts/train_idrid_fixed_iterations.py --device cuda
-```
+이번 수정에서는 전체 데이터 진단 runner의 기본 실행을 차단했다.
+`run_idrid_remote.sh`도 내부 validation을 사용하는 이전 runner 대신
+**fixed-iteration train-only runner**를 실행한다. Epoch 로그는
+`[TRAIN ONLY; TEST NOT EVALUATED]`, 최종 평가는 `[FINAL OFFICIAL TEST]`로 구분한다.
+최종 평가가 끝나기 전에는 `evaluation_status`가 `pending_training`이다.
 
-기존 train+test 516장 실행은 배치 크기 24에서 `ceil(516/24)=22`회/epoch였다.
-새 실행은 `data.train_batches_per_epoch: 22`로 **같은 22회/epoch, 500 epochs,
-총 11,000회 미니배치 업데이트**를 유지한다. 적은 학습 영상에서 필요한 만큼 반복
-샘플링하며 test 영상으로 빈자리를 채우지 않는다. epoch마다 모든 학습 영상을 정확히
-한 번 사용하는 방식은 아니다. `metrics_history.json`과 checkpoint에 누적
-`optimizer_steps`와 `batches_per_epoch`를 저장한다. Phase 1 종료 시점 자체는 기존과
-같은 수렴 조건을 사용하므로 새 데이터에 따라 달라질 수 있다.
+## 원격에서 실행할 명령어
 
-EfficientNetV2-S + GeM(Spatial Attention 미사용), ImageNet 초기화,
-PCOL/SCOLw 0.1/0.1, RMSE/MMNP 1/2, random margin, 정규화/증강과 단계 설정은
-직전 실행과 동일하다. **내부 검증 없이** 학습 RMSE로 scheduler를 조정하고,
-조기 종료 없이 마지막 `final.pt`를 다시 읽어 test를 한 번 평가한다.
-과거 train+test로 학습한 IDRiD checkpoint를 이어서 사용하지 않는다.
-
-전체 Accuracy/MAE와 **Class 0, 1, 2, 3, 4의 정확도 및 정답 수/표본 수**를 콘솔에
-출력한다. 클래스별 정확도는 해당 정답 클래스의 표본 중 맞힌 비율(recall)이며,
-클래스 precision과는 다르며, 전체 Accuracy는 클래스별 정확도의 단순 평균이 아니라
-전체 정답 수/N이다.
-
-- `evaluation_metrics.json`: `test.per_class["0".."4"]`의 `accuracy`(0–1),
-  `accuracy_percent`(0–100), `correct_count`, `support`, `mae`.
-- `per_class_metrics.csv`: 다섯 클래스의 결과를 각각 한 행으로 저장.
-- `predictions.csv`: test 103장의 개별 예측. 학습과의 파일 내용 중복은 없어야 한다.
-- 기본 결과 폴더: `checkpoints/hybrid_idrid_train_only_fixed22_gem_no_spatial_seed42/`.
-
-이전 실험에서 이미 test를 학습/확인한 이력은 새 실행으로 지워지지 않는다.
-이번 실행의 학습에서 test를 제외한 결과이며, 최종 일반화 주장에는 별도의
-미사용 데이터 검증이 필요할 수 있다. 이전 전체 데이터 스크립트는 과거 진단 실험을
-보존하기 위해 남겨두며, 지금은 위 **fixed_iterations** 스크립트를 사용한다.
-
-다운로드 없는 실제 모델 동작 검사:
-
-```bash
-python scripts/smoke_test_idrid_fixed_iterations.py
-```
-
-## 팀원 최종 모델 + Balanced Softmax로 동일한 IDRiD 실험
-
-원본 브랜치 `gem_no_spatial_0814_bs_ablation`의 `03fd7e0`을 확인하여,
-5-class 선형 classification head와 `CE(logits + log(class_counts), y)`를
-선택적으로 추가했다. 기존 모델/체크포인트 형식은 바꾸지 않으며 BS를 켠 모델만
-`classification_head.fc.*` 파라미터와 `logits` 출력을 추가한다.
-팀원 브랜치를 병합하거나 덮어쓰지 않고 현재 `learnable_dist`에서 실행한다.
-
-```bash
-git fetch origin
-git merge --ff-only origin/learnable_dist
-python scripts/train_idrid_balanced_softmax.py --device cuda
-```
-
-기본 설정은 `configs/hybrid_idrid_balanced_softmax.yaml`이다.
-원본 YAML의 PCOL/SCOLw 0.5/0.1, RMSE/MMNP 1/2와 BS 계수 0.1을 사용한다.
-이전 IDRiD 실행의 PCOL 계수는 0.1이었으므로, 이번 설정과의 차이는 BS 추가만이
-아니라 PCOL 계수 변화도 포함한다. BS만의 영향을 비교하려면 따로 설정 파일을
-복사하여 두 실행의 PCOL 계수까지 동일하게 맞춰야 한다.
-
-원본 브랜치에는 BS 계수 0.9를 사용하는 별도 ablation 스크립트도 있지만,
-해당 값이 최종 최적값이라는 결과 파일은 확인되지 않았다. 기본값을 임의로 0.9로
-간주하지 않는다. 팀원의 최종 선택이 0.9였다면 다음처럼 명시할 수 있다.
-
-```bash
-python scripts/train_idrid_balanced_softmax.py --device cuda --classification-weight 0.9
-```
-
-계수 변경 시 기본 결과 폴더도 바뀐다. 기본 0.1 실행은
-`checkpoints/hybrid_idrid_bs_w0p1_train_only_fixed22_gem_no_spatial_seed42/`에 저장한다.
-`balanced_softmax.json`과 checkpoint에는 실제 학습 클래스 개수, BS 계수,
-원본 브랜치/commit과 예측 방식을 기록한다. 학습 로그에는 `classification` 원래 값과
-가중 기여도를 함께 출력한다. 클래스 개수는 EyePACS나 test에서 가져오지 않고,
-**공식 train 중 test 동일 파일을 제외한 실제 학습 풀**에서 계산한다.
-
-모델은 EfficientNetV2-S + GeM, Spatial Attention 미사용이다. **원본 구현처럼
-BS는 보조 손실이며 최종 Accuracy/MAE는 회귀 출력을 반올림/제한하여 계산**한다.
-분류 head의 argmax로 평가 방식을 임의 변경하지 않는다. Class 0–4 정확도와
-`per_class_metrics.csv`도 동일하게 저장한다.
-
-데이터/학습 예산은 직전 IDRiD 실험에 맞춰 입력 224, train-only, 내부 검증 없음,
-22 updates/epoch × 500 epochs, margin lr=1e-3, Phase 1 최소 50/최대 100,
-학습 RMSE scheduler, 조기 종료 없음과 마지막 checkpoint 평가를 유지한다.
-원본 EyePACS의 입력 384, 100 epochs, margin lr=1e-5, Phase 1 20/30 및
-검증 기반 checkpoint 선택까지 그대로 재현하는 실험은 아니다.
-기존 데이터 준비 폴더를 재사용하고, 모델은 ImageNet 가중치에서 새로 학습한다.
-
-```bash
-python scripts/smoke_test_idrid_balanced_softmax.py
-```
-
-위 검사는 실제 모델을 합성 데이터에서 두 epoch만 실행하며 실제 IDRiD를 다운로드하지 않는다.
-
-## 논문과 일치시키는 조건
-
-[CLOC 논문 §4.1–4.2 및 부록 A.4](https://arxiv.org/pdf/2504.17813)의
-공식 IDRiD 학습 413장/테스트 103장 분할, 224×224 입력, 수평·수직 반전,
-회전, Gaussian blur, IDRiD용 color jitter를 적용한다. 등급별 개수는 다음과 같다.
-
-| 분할 | Class 0 | Class 1 | Class 2 | Class 3 | Class 4 | 전체 |
-|---|---:|---:|---:|---:|---:|---:|
-| 학습 | 134 | 20 | 136 | 74 | 49 | 413 |
-| 테스트 | 34 | 5 | 32 | 19 | 13 | 103 |
-
-모델과 학습은 기존 프로젝트의 **Hybrid 모델 및 `train_hybrid_ordinal.py` 방식**을
-기준으로 한다. IDRiD 분할과 요청한 영상 크기/증강 종류를 적용하며,
-CLOC의 ResNet-50, 500 epochs, 학습 정확도 95% 기반 단계 전환은 사용하지 않는다.
-논문에서 명시하지 않은 회전 범위/증강 확률을 논문의 설정으로 단정하지 않는다.
-
-`configs/hybrid_idrid_efficientnet_v2_s.yaml`에 모든 조건을 기록했다.
-회전 ±30°, 수평/수직 반전 각 확률 0.5, blur 확률 0.5(커널 5, σ 0.1–2.0),
-color jitter 확률 0.5(brightness/contrast/saturation 0.2, hue 0.05)를 기본으로 한다.
-평가에는 resize, tensor 변환, ImageNet 정규화만 적용한다.
-EyePACS의 검은 테두리 crop은 이 프로토콜에 추가하지 않았다.
-
-PCOL과 SCOLw 가중치는 이전 실험에 맞춰 각각 `alpha: 0.1`, `beta: 0.1`을 사용한다.
-총손실은 `0.1 * PCOL + 0.1 * SCOLw + 1.0 * RMSE + 2.0 * MMNP`이다.
-실행 시작 시 가중치를 출력하며, 매 epoch가 끝나면 각 손실의 원래 값과 가중치를
-곱한 기여도를 함께 출력한다. 실제 실행 값은 `run_config.json`에도 저장한다.
-
-각 epoch 시작 시 `[Phase 1: joint]` 또는 `[Phase 2: frozen]`, epoch 번호,
-네트워크 학습률과 margin 학습 여부를 출력한다. 진행 막대에도 phase를 표시한다.
-`[Phase 1 -> Phase 2]` 전환 로그에는 전환 사유, 고정 간격, 다음 phase의 시작
-epoch 및 학습률/scheduler/checkpoint 선택 상태 초기화 여부를 표시한다.
-`metrics_history.json`의 각 epoch에도 `phase`와 margin 고정 여부를 저장한다.
-
-기존 코드의 기준 commit은 IDRiD 추가 전 `e677bfb`이다. 이 설정에서 PCOL/SCOLw
-계수만 사용자 지정 `0.1/0.1`로 적용했다. Adam(lr=0.001, weight_decay=0.0001),
-최대 75 epochs, validation RMSE 기반 ReduceLROnPlateau(factor=0.2, patience=5),
-조기 종료 patience=13, temperature=1.0, ImageNet 정규화, GeM,
-dropout=0.2와 projection 연결 입력을 사용한다. 현재 Spatial Attention은 미사용이다.
-역빈도 SCOLw 표본 가중치,
-L2 embedding 정규화, 대조 손실의 평균 1 margin 정규화와 stop-gradient도 유지한다.
-초기 인접 간격은 기존 지정값 `[0.385, 0.451, 0.253, 0.330]`, 간격 학습률은 1e-5다.
-IDRiD 전용 기준은 PCOL/SCOLw 계수와 데이터/분할 어댑터이므로 기존 EyePACS 실행
-설정 파일은 변경하지 않는다.
-
-## Random margin · 장기 학습 재실험
-
-새 실행 파일은 `scripts/train_idrid_random_margin.py`, 설정은
-`configs/hybrid_idrid_random_margin_long.yaml`이다. 기존 75-epoch 실험 설정은
-비교를 위해 보존한다. 원격 프로젝트 폴더에서 기존 준비 데이터를 사용한다.
-
-```bash
-python scripts/train_idrid_random_margin.py --device cuda
-```
-
-| 조건 | 기존 IDRiD 실험 | Random margin 재실험 |
-|---|---|---|
-| 인접 간격 초기화 | 고정된 4개 값 | 각 간격을 U[0.5, 1.0)에서 추출 |
-| 간격 학습률 | 1e-5 | 1e-3 |
-| 전체 epoch 상한 | 75 | 500 |
-| Phase 1 최소/최대 | 20/30 | 50/100 |
-| 간격 변화량 허용값 | 1e-3 | 1e-5 |
-| 연속 안정 epoch 수 | 3 | 10 |
-| Phase 2 조기 종료 patience | 13 | 50 |
-| LR scheduler patience | 5 | 10 |
-
-U[0.5, 1.0) 초기화와 Softplus 양수 제약은 [CLOC §3.3](https://arxiv.org/pdf/2504.17813)
-설명을 따른다. 학습 중 간격을 0.5 이상으로 고정하는 제약은 아니며 0보다 큰 값으로
-계속 학습한다. seed=42로 전체 초기화가 재현되므로 같은 설정/seed로 다시 실행하면
-같은 초기 간격이 나온다. 학습 기간, margin 학습률, 수렴 허용값과 patience는 이번
-Hybrid 재실험을 위한 선택이며 논문의 전체 학습 프로토콜을 재현한다는 의미는 아니다.
-
-PCOL/SCOLw 가중치 0.1/0.1, RMSE/MMNP 가중치 1/2, MMNP 쌍 평균, temperature,
-ImageNet 정규화, 배치 구성, 데이터 분할, 영상 증강은 기존 IDRiD 설정과 같다.
-현재 설정에서 Spatial Attention은 꺼져 있으며 EfficientNetV2-S와 GeM은 유지한다.
-Phase 1은 최소 50 epochs 이전에는 종료되지 않으며, 이후 최대 인접 간격 변화량이
-1e-5 이하로 10회 연속 유지되거나 100 epochs에 도달하면 고정한다.
-Phase 2는 검증 RMSE가 50회 연속 개선되지 않으면 조기 종료하며, 전체 500 epochs를
-반드시 수행한다는 의미는 아니다. checkpoint와 최종 평가는 이전처럼 검증 RMSE만으로
-선택한 `best.pt`를 사용하고, 테스트 지표로 학습 설정을 자동 선택하지 않는다.
-
-기본 결과 폴더는 `checkpoints/hybrid_idrid_random_margin_long_a01_b01_no_spatial_seed42/`이다.
-`initial_margins.json`에 실제 초기값과 초기화 방식/학습률을 저장한다.
-매 epoch 로그와 `metrics_history.json`에는 현재 간격, 초기값 대비 변화량,
-epoch 간 최대 변화량과 안정 epoch 수를 저장한다. 기존 결과를 덮어쓰지 않는다.
-
-```bash
-python scripts/smoke_test_idrid.py --config configs/hybrid_idrid_random_margin_long.yaml
-```
-
-위 smoke test는 random 설정을 읽되 합성 데이터와 두 epoch로 단축해 실제 모델의
-초기화·역전파·간격 고정·checkpoint 평가를 확인한다. 500-epoch 성능 검증이 아니다.
-
-## 전체 train + test 학습 후 같은 test 재평가 (독립 평가 아님)
-
-사용자 요청의 별도 실험으로 `scripts/train_idrid_all_data.py`와
-`configs/hybrid_idrid_all_data_no_spatial.yaml`을 추가했다.
-공식 train 413장과 test 103장을 합쳐 **516개 행 전부를 학습 풀에 포함**한다.
-내부 검증은 만들지 않고, 학습 종료 후 **같은 공식 test 103장**을 다시 평가한다.
-이는 학습 데이터 재평가(resubstitution)이며 일반화 성능이나 CLOC의 독립 테스트
-결과와 비교할 수 없다. 기존 `train_idrid.py`의 독립 테스트 절차는 유지한다.
-
-```bash
-git fetch origin
-git merge --ff-only origin/learnable_dist
-python scripts/train_idrid_all_data.py --device cuda
-```
-
-이미 준비한 `data/idrid/prepared/`를 사용하며 데이터를 다시 받지 않는다.
-아직 준비하지 않았다면 `prepare_idrid.py`를 먼저 실행한다. 동일 파일 내용이 양쪽에
-있는 미러는 기존처럼 `--overlap-policy report`로 감사 결과를 남기고 준비한다.
-학습에서는 행/라벨을 임의로 삭제하거나 변경하지 않으므로 원본 중복/라벨 충돌도
-그대로 보존되며, 실제 고유 영상 수와 중복 요약을 `training_split.json`에 기록한다.
-
-모델은 **ImageNet 사전학습 EfficientNetV2-S + GeM, Spatial Attention 미사용**이다.
-PCOL/SCOLw 가중치 0.1/0.1, RMSE/MMNP 1/2, margin U[0.5, 1.0) 초기화,
-Phase 1 최소 50/최대 100 epochs, 나머지 증강/정규화는 random 장기 설정을 유지한다.
-기존 층화 미니배치를 사용하며 배치 크기 24이면 epoch당 22회 업데이트한다.
-이는 516개 영상을 매 epoch 정확히 한 번씩 순회한다는 의미는 아니며 표본 반복이 가능하다.
-검증이 없으므로 scheduler 입력은 **학습 RMSE**로 바꾸고, 조기 종료와 best checkpoint
-선택은 사용하지 않는다. 기본 500 epochs를 학습한 **마지막 모델 `final.pt`**를 다시
-불러와 평가한다. Phase 2에서도 고정 간격에 대한 MMNP는 네트워크를 갱신한다.
-
-결과 폴더는 `checkpoints/hybrid_idrid_all_data_gem_no_spatial_seed42/`이다.
-`evaluation_metrics.json`의 `seen_test`에 Accuracy, MAE, 클래스별 성능과 혼동행렬을
-저장한다. `evaluation_is_independent: false`, `official_test_used_for_training: true`,
-`independent_test: null`을 함께 기록한다. 콘솔도 `TRAIN-SEEN (NOT independent)`로
-표시하며 `predictions.csv`에는 `included_in_training_pool` 열을 둔다.
-출력 폴더가 이미 있으면 덮어쓰지 않으므로 `--output-dir`로 새 경로를 지정한다.
-
-```bash
-python scripts/train_idrid_all_data.py --device cuda --epochs 500 \
-  --output-dir checkpoints/idrid_all_data_no_spatial_run02
-python scripts/smoke_test_idrid_all_data.py
-```
-
-마지막 명령은 다운로드 없이 합성 영상/실제 EfficientNetV2-S로 두 epoch를 실행하는
-동작 검사다. 실제 IDRiD 성능 실험은 아니며, 로컬에서 원격 GPU 학습을 시작하지 않는다.
-설정 변경은 이미 실행 중인 학습에는 적용되지 않으므로 새 프로세스로 시작한다.
-
-## 원격 컴퓨터에서 실행
-
-원격 GPU 컴퓨터의 프로젝트 디렉터리에서 실행한다. 이 명령은 명령을 실행한
-컴퓨터에 데이터를 받는다. 로컬에서 SSH로 원격 다운로드를 실행하는 스크립트가 아니다.
+CUDA/PyTorch가 설치된 학습 환경을 활성화한 뒤 원격 프로젝트 디렉터리에서 실행한다.
+아래 명령은 기존 원본 데이터와 과거 실험 결과를 삭제하지 않는다.
 
 ```bash
 git switch learnable_dist
 git pull --ff-only origin learnable_dist
 python -m pip install -r requirements-idrid.txt
+
+# 이미 내려받은 data/idrid/raw를 다시 검사하고 prepared CSV를 갱신한다.
+python scripts/prepare_idrid.py --data-dir data/idrid --overlap-policy report
+
+# validation 없이 train-only 학습 -> 마지막 checkpoint -> test 103장 평가
+python scripts/train_idrid_fixed_iterations.py \
+  --data-dir data/idrid --device cuda \
+  --output-dir checkpoints/idrid_heldout_audited_seed42_run01
+
+# 학습 종료 후 저장 예측을 대조하여 test 결과만 출력한다.
+python scripts/report_idrid_test.py checkpoints/idrid_heldout_audited_seed42_run01
 ```
 
-CUDA에 맞는 PyTorch가 설치된 학습 환경을 활성화한다. Kaggle 인증은 원격 컴퓨터에
-설정한다. [공식 Kaggle 인증 안내](https://github.com/Kaggle/kaggle-cli/blob/main/skills/references/auth.md)를
-따라 API 토큰 또는 기존 `kaggle.json`을 사용하며, 인증 파일은 저장소에 넣지 않는다.
+출력 폴더가 이미 있으면 덮어쓰지 않으므로 새 실행에는 `run02`처럼 다른 이름을 쓴다.
+기존 train+test 학습 checkpoint를 이어서 사용하지 않고 ImageNet 가중치에서 새로 시작한다.
+이미 실행 중인 프로세스는 코드를 갱신해도 바뀌지 않는다. 새 코드는 새 프로세스로 실행한다.
 
-Linux/WSL에서는 다음 한 줄로 다운로드, 준비, 학습, 평가를 진행한다.
+데이터가 아직 없다면 Kaggle 인증을 원격 컴퓨터에 설정한 뒤 다음을 사용한다.
 
 ```bash
-IDRID_PYTHON=python bash scripts/run_idrid_remote.sh --device cuda
+IDRID_PYTHON=python bash scripts/run_idrid_remote.sh \
+  --device cuda --output-dir checkpoints/idrid_heldout_audited_seed42_run01
 ```
 
-데이터/결과 저장 위치를 바꾸려면 다음과 같이 실행한다.
+다른 경로의 데이터를 사용할 때는 `--data-dir /path/to/idrid`를 준비/학습 양쪽에
+동일하게 지정한다. 기존에 추출한 Kaggle 폴더가 별도 위치에 있다면 먼저 다음을 실행한다.
 
 ```bash
-IDRID_PYTHON=python IDRID_DATA_DIR=/mnt/data/idrid \
-  bash scripts/run_idrid_remote.sh --device cuda \
-  --output-dir checkpoints/idrid_run_01
+python scripts/prepare_idrid.py --source-dir /path/to/extracted-idrid \
+  --data-dir data/idrid --overlap-policy report
 ```
 
-Windows PowerShell 또는 단계별 실행:
+## 최종 test의 실제 구성 확인
 
-```text
-python scripts/prepare_idrid.py --download --data-dir data/idrid
-python scripts/train_idrid.py --config configs/hybrid_idrid_efficientnet_v2_s.yaml --data-dir data/idrid --device cuda
-```
+| 공식 분할 | Class 0 | Class 1 | Class 2 | Class 3 | Class 4 | 전체 |
+|---|---:|---:|---:|---:|---:|---:|
+| train | 134 | 20 | 136 | 74 | 49 | 413 |
+| test | 34 | 5 | 32 | 19 | 13 | 103 |
 
-이미 압축을 해제했다면 다운로드 대신 다음을 실행한다.
+데이터 준비는 `B. Disease Grading`의 `Retinopathy grade`만 읽는다.
+다른 과제의 영상/황반부종 라벨을 섞지 않는다. Train/test에서 `IDRiD_001` 같은
+파일명이 반복되므로 **공식 split 폴더와 파일명**으로 연결한다.
 
-```text
-python scripts/prepare_idrid.py --source-dir /path/to/extracted/kaggle-dataset --data-dir data/idrid
-```
+학습 시작 시 다음을 확인한다.
 
-Kaggle ZIP은 원격의 `data/idrid/archive/`에 보관하고, `B. Disease Grading`만
-`raw/`에 추출한다. Segmentation/Localization 영상과 라벨은 학습에 섞지 않는다.
-준비 시 `Image name`과 `Retinopathy grade` 열을 읽으며 황반부종 라벨은 사용하지 않는다.
-학습/테스트에 같은 파일명이 있으므로 **분할 폴더 + 파일명**으로 연결한다.
-공식 클래스 분포, 누락/중복 영상, 두 분할 사이의 동일 파일 내용(SHA-256)을 검사한다.
+1. Prepared CSV의 checksum과 실제 영상 파일의 SHA-256을 다시 계산한다.
+   준비 이후 파일을 덮어썼다면 학습을 중단하고 재준비를 요구한다.
+2. 각 경로가 실제 공식 Training/Testing 폴더에 속하는지 검사한다.
+3. EXIF 방향을 적용한 RGB 픽셀의 checksum도 계산한다. 파일 메타데이터나
+   lossless 저장 형식만 달라 파일 SHA-256이 다른 동일 영상도 확인한다.
+4. Test와 같은 파일 **또는 같은 픽셀**을 가진 사본은 **학습 쪽에서만 제외**한다.
+   Test 103장과 정답은 보존한다. 예를 들어 사본 한 장이 있으면 실제 학습은
+   412장, test는 그대로 103장이다. 원본 파일/라벨은 삭제하거나 고치지 않는다.
+5. 최종 평가 직전 실제 학습 멤버와 test의 ID·경로·파일·픽셀 해시가 겹치지 않는지
+   검사한다. 평가 loader가 요청된 test 영상과 정답을 정확히 한 번씩 내놓았는지
+   검증한 뒤에만 결과를 저장한다.
 
-### 동일한 이미지 내용이 학습/테스트에 포함된 경우
+`--overlap-policy report`는 원본 분할을 준비 단계에서 보존하는 설정이다.
+현재 train-only runner는 그 사본을 실제 학습 풀에서 제외하므로,
+report 옵션이 test를 학습에 포함하도록 허용하는 것은 아니다.
 
-`Identical image contents`는 같은 파일명이 아니라 **파일 바이트의 SHA-256 일치**를
-뜻한다. 기본 동작은 준비를 중단하고 `prepared/duplicate_audit.json`에 양쪽 파일
-경로, 등급, 해시와 라벨 충돌 여부를 기록하는 것이다. 이 단계에서 중단되면
-`manifest.json`이 없으므로 학습을 먼저 실행할 수 없다.
+정확한 픽셀 일치는 JPEG 재압축 등으로 픽셀이 달라진 유사 영상이나 동일 환자의
+다른 촬영을 모두 탐지하지 않는다. 공개 CSV에 환자 ID가 없어 환자 단위 독립성까지
+보장할 수 없다. 과거 test를 이미 학습하거나 반복 확인한 이력도 새 실행으로 지워지지 않는다.
 
-공급된 413/103 분할을 보존하며 중복을 명시한 결과를 얻으려면 다음처럼 실행한다.
-기존 원격 `raw/`를 다시 검사하므로 데이터를 다시 다운로드하지 않는다.
+## 모델과 학습 예산
+
+기존 train-only 설정의 모델과 학습 예산을 유지한다.
+
+- EfficientNetV2-S, ImageNet 초기화, GeM, Spatial Attention 미사용, 입력 224×224.
+- PCOL/SCOLw 0.1/0.1, RMSE/MMNP 1/2, 회귀 입력은 projection concat.
+- Seed 42, batch 24, **22 updates/epoch × 500 epochs = 11,000 updates**.
+  층화 미니배치는 train 안에서 반복 표집하며 test로 배치를 채우지 않는다.
+- 초기 간격 U[0.5, 1.0), margin lr=1e-3. Phase 1 최소 50/최대 100 epochs,
+  변화량 1e-5 이하가 10회 유지되면 간격을 고정한다.
+- Validation/early stopping 없음. Scheduler는 **train RMSE**만 사용한다.
+- 마지막 `final.pt`를 다시 읽고 test를 평가한다. Test 점수로 checkpoint를 고르지 않는다.
+
+기본 설정은 `configs/hybrid_idrid_fixed_iterations_no_spatial.yaml`이다.
+이전 결과와 섞이지 않도록 기본 출력 폴더에는 `_audited_seed42`가 포함된다.
+
+## Balanced Softmax 모델을 평가할 경우
+
+현재 브랜치의 BS 모델도 같은 train-only 검사를 사용한다.
+해당 모델을 돌리던 실험이라면 위 학습 명령 **대신** 다음을 실행한다.
 
 ```bash
-python scripts/prepare_idrid.py --data-dir data/idrid --overlap-policy report && \
-python scripts/train_idrid.py --data-dir data/idrid --device cuda
+python scripts/train_idrid_balanced_softmax.py \
+  --data-dir data/idrid --device cuda \
+  --output-dir checkpoints/idrid_bs_heldout_audited_seed42_run01
+python scripts/report_idrid_test.py checkpoints/idrid_bs_heldout_audited_seed42_run01
 ```
 
-통합 스크립트에서는 `IDRID_OVERLAP_POLICY=report` 환경변수를 지정할 수 있다.
-report 모드는 영상이나 정답 라벨을 삭제/수정하지 않는다. 전체 테스트 결과에는
-학습 영상과의 중복이 포함되므로 독립적인 일반화 성능이라고 해석하지 않는다.
-`evaluation_metrics.json`의 `data_integrity`에 중복 개수를 표시하고,
-`test_without_train_overlap.metrics`에 해당 영상을 제외한 Accuracy/MAE도 저장한다.
-후자는 표본 수가 103장보다 적어질 수 있어 논문의 원래 테스트 결과와 동일한 평가가 아니다.
-모든 테스트 영상이 중복이면 해당 부분 지표는 `null`과 사유를 기록한다.
-이 해시 검사는 바이트가 완전히 동일한 파일만 찾으며 재압축 영상이나 동일 환자를
-모두 탐지하는 검사는 아니다. 클래스 개수 일치만으로 Kaggle 미러의 내용이 원본과
-동일하다고 보장하지 않는다. 중복의 출처는 보고서를 바탕으로 별도 확인해야 한다.
+`configs/hybrid_idrid_balanced_softmax.yaml`은 원본 브랜치
+`gem_no_spatial_0814_bs_ablation`의 `03fd7e0`에 따른 classification head와
+`CE(logits + log(class_counts), y)` 보조 손실을 사용한다.
+PCOL/SCOLw는 0.5/0.1, BS 계수는 0.1이다. 일반 설정과 PCOL 계수도 다르므로
+이 둘의 차이를 BS 하나의 효과로 해석하지 않는다. `--classification-weight 0.9`는
+명시한 별도 실험에서만 사용한다. BS 클래스 개수는 사본 제외 후 실제 train에서만 계산한다.
+최종 등급은 원래 구현처럼 **회귀 출력을 반올림/0–4 제한**하여 얻는다.
+Classification head의 argmax로 평가 방식을 바꾸지 않는다.
 
-별도 `git worktree --detach`로 실행 중인 폴더는 다음 명령으로 업데이트한다.
-로컬 코드 변경이 있으면 Git이 중단하므로 해당 변경을 먼저 보존해야 한다.
+## 어떤 파일을 논문 결과로 사용해야 하는가
+
+- `evaluation_metrics.json`의 **`test`**: 최종 official test Accuracy, Macro,
+  QWK, MAE, 클래스별 정확도와 혼동행렬. `evaluation_status: complete`,
+  `official_test_used_for_training: false`, `evaluation_is_independent: true`,
+  `evaluation_samples: 103`을 확인한다.
+- `predictions.csv`: test 103장 각각의 `sample_id`, `split`, 정답, 예측 등급,
+  연속 예측값, `overlaps_train`. 모든 행이 `test:*`/`official_test`여야 한다.
+- `per_class_metrics.csv`: 각 정답 클래스의 정답 수/표본 수와 정확도(recall), MAE.
+- `training_split.json`: 실제 train/test 멤버, 제외한 학습 사본, 픽셀 해시와 클래스 개수.
+- `run_config.json`: 실제 설정과 코드 commit, 원본 데이터 정보, 영상 재검사 결과.
+- `metrics_history.json`: 학습 경과. 여기에 있는 epoch 정확도를 test로 사용하지 않는다.
+
+`report_idrid_test.py`는 test 멤버십/103장 분포를 검사하고, 저장 예측에서
+Accuracy·Macro·QWK·MAE·혼동행렬을 다시 계산해 summary와 일치하는지 확인한다.
+Train-only 로그만 있거나 `seen_test`인 예전 결과는 독립 test 점수로 출력하지 않는다.
+
+## 과거 진단 runner
+
+`train_idrid_all_data.py`는 과거 결과 해석을 위해 보존하지만 기본 실행은 중단된다.
+의도적인 학습 데이터 재평가 진단만 `--allow-test-training`을 명시할 수 있다.
+그 결과는 여전히 `seen_test`이며 일반화 성능 보고에 사용하지 않는다.
+이전 내부 validation runner는 `train_idrid.py`, 장기 설정은
+`train_idrid_random_margin.py`이다. 현재 요청의 실행은 위 fixed-iteration runner다.
+
+## 로컬 동작 검사
 
 ```bash
-git fetch origin
-git merge --ff-only origin/learnable_dist
+python -m pytest tests/test_idrid.py tests/test_idrid_fixed_iterations.py \
+  tests/test_idrid_balanced_softmax.py tests/test_idrid_evaluation_integrity.py -q
+python scripts/smoke_test_idrid_fixed_iterations.py
+python scripts/smoke_test_idrid_balanced_softmax.py
 ```
 
-## 학습과 평가 절차
-
-1. 공식 학습 413장만 등급별 층화하여 내부 학습 330장/검증 83장으로 나눈다.
-   공개 라벨에는 환자 ID가 없으므로 환자 단위 독립 분할이라고 주장하지 않는다.
-   학습 세트 내부에도 같은 내용의 파일이 있으면 SHA-256 그룹 단위로 층화 분할하여
-   동일 영상이 내부 학습과 검증에 동시에 들어가지 않게 한다. 이 경우 정확한 분할
-   개수는 달라질 수 있으며 `training_split.json`에 실제 목록과 방식을 기록한다.
-   동일 내용에 서로 다른 등급이 붙어 있으면 그룹을 유지하는 후보 분할 중 모든
-   등급이 포함되고 목표 크기에 가까운 분할을 고른다. 정답 라벨은 변경하지 않는다.
-2. 같은 모델을 최대 75 epochs 학습한다. Phase 1에서는 네트워크와 간격을 함께
-   학습하며 최소 20 epochs 이후 간격 변화량이 0.001 이하로 3회 유지되거나,
-   30 epochs에 도달하면 간격을 고정하고 Phase 2로 전환한다.
-3. Phase 2 전환 시 네트워크 학습률, scheduler, 최적 checkpoint 추적 상태와
-   조기 종료 카운터를 초기화한다. **검증 RMSE 최솟값**으로 `best.pt`를 선택하고,
-   scheduler도 검증 RMSE를 사용한다. 13회 연속 개선이 없으면 조기 종료한다.
-   간격이 고정된 Phase 2에서도 경계 손실은 네트워크를 계속 최적화한다.
-4. **선택한 `best.pt`를 다시 읽어** 공식 테스트 **103장**을 한 번 평가한다.
-   테스트 Accuracy/MAE는 epoch, scheduler, checkpoint 선택에 사용하지 않는다.
-
-최초 IDRiD 스크립트에 추가했던 학습 기간 선택 후 413장 전체 재학습(refit)은 제거했다.
-최종 checkpoint는 내부 학습 세트(기본 330장)에서 학습한 모델이다. 즉 전체 413장을
-모두 gradient 갱신에 사용한 실험으로 표기하지 않는다. 기본 설정의 epoch당 배치 수는
-14개이며, 테스트 데이터는 학습이나 checkpoint 선택에 섞지 않는다.
-기존 결과가 있는 출력 디렉터리에는 덮어쓰지 않으므로 새 실험에는 다른 `--output-dir`을 쓴다.
-
-## 저장 결과
-
-기본 결과 디렉터리: `checkpoints/hybrid_idrid_efficientnet_v2_s_existing_a01_b01_no_spatial/`
-
-이전 IDRiD 학습 방식/가중치 실행 결과와 구분하기 위해 기본 경로를 변경했다.
-이미 실행 중인 프로세스는 시작할 때 읽은 설정으로 계속 학습하므로,
-새 가중치를 적용하려면 기존 실행을 종료하고 새 프로세스로 시작한다.
-기존 체크포인트를 자동으로 이어서 학습하지 않는다.
-
-- `evaluation_metrics.json`: 전체 테스트 및 학습 중복 제외 부분집합의 지표, 중복 정보.
-- `predictions.csv`: 각 영상의 정답, 회귀 출력, 예측 등급, 절대오차, `overlaps_train` 표시.
-- `best.pt`: 내부 검증 RMSE가 가장 낮은 Phase 2 모델.
-- `last.pt`, `phase1_last.pt`: 마지막 epoch 및 단계 전환 직전 checkpoint.
-- `best_metrics.json`, `metrics.json`: 최적 검증 결과와 최종 테스트 결과.
-- `run_config.json`: 설정, 데이터 출처/개수, 실행 Git commit 및 환경.
-- `training_split.json`: 내부 학습/검증 영상 목록 및 분할 방식.
-- `metrics_history.json`: epoch별 학습/검증 지표와 간격, phase, best 여부.
-
-Accuracy는 클래스별 정확도의 단순 평균이 아니라 전체 정답 수/N이다.
-MAE는 회귀 출력을 반올림하고 0–4 범위로 제한한 **예측 등급과 정답 등급의 절대차 평균**이다.
-반올림은 기존 프로젝트와 같은 PyTorch/NumPy의 nearest-even 규칙을 사용한다.
-`continuous_mae`는 참고용으로 별도 저장하며 논문의 등급 MAE와 혼동하지 않는다.
-`accuracy`는 0–1 비율, `accuracy_percent`는 0–100 퍼센트이다.
-
-IDRiD에서는 `mmnp_pair_reduction: mean`, `mmnp_reduction: mean`으로 이전 실험의
-경계 손실 계산을 사용한다. 각 anchor의 positive–negative 쌍 손실을 **평균**한 뒤
-유효한 anchor 간 평균을 구한다. 쌍 수가 서로 다를 수 있으므로 모든 쌍을 한꺼번에
-평균하는 것과는 다르다. 공통 loss 클래스의 기본값 `pair_reduction: sum`은 유지하여
-이미 sum 방식으로 설정한 다른 실험이 자동으로 바뀌지 않게 했다.
-이전 IDRiD의 쌍 합산 실행과는 손실 스케일이 다르므로 결과/설정을 구분한다.
-
-## 데이터 다운로드 없는 동작 검사
-
-```text
-python -m pip install pytest
-python -m pytest tests/test_idrid.py tests/test_learnable_margins.py -q
-python scripts/smoke_test_idrid.py
-```
-
-Smoke test는 임시 디렉터리에 만든 합성 이미지 30장으로 실제 EfficientNetV2-S,
-224×224 증강, GeM/Spatial Attention, 역전파, 간격 고정, checkpoint 재로딩,
-Accuracy/MAE 저장까지 검사한다. CPU, batch 10, 작은 projection/regression head,
-사전학습 미사용, 각 단계 1 epoch를 사용하므로 실제 장기 학습/원격 CUDA 검증을 대체하지 않는다.
-데이터와 ImageNet 가중치를 다운로드하지 않으며 모든 결과에 synthetic 표식을 기록한다.
-실제 IDRiD 성능은 원격 학습 완료 후에만 확인할 수 있다.
+Smoke test는 합성 영상/작은 head/사전학습 미사용으로 실제 EfficientNetV2-S의
+역전파, 간격 고정, 저장·재로딩과 평가를 확인한다. 실제 원격 IDRiD/CUDA 성능을 대신하지 않는다.

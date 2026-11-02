@@ -1,7 +1,7 @@
 """Train on official IDRiD TRAIN only, preserving 22 updates/epoch; evaluate TEST once.
 
-No internal validation, no test-driven scheduler/checkpoint selection. Exact image
-copies of test files are removed from training, never from the evaluation set.
+No internal validation, no test-driven scheduler/checkpoint selection. File-byte
+or decoded-pixel copies of test images are removed from training, never from test.
 """
 from __future__ import annotations
 
@@ -22,8 +22,10 @@ PROTOCOL = "official_train_only_no_validation_fixed_iterations_final_epoch_heldo
 
 
 def exclude_test_copies(training, test):
-    """Keep every official test row; exclude byte-identical training copies."""
+    """Keep every official test row; exclude file-byte or decoded-pixel copies."""
     overlap = training["sha256"].isin(set(test["sha256"]))
+    if "_pixel_sha256" in training and "_pixel_sha256" in test:
+        overlap |= training["_pixel_sha256"].isin(set(test["_pixel_sha256"]))
     excluded = training.loc[overlap].copy()
     clean = training.loc[~overlap].copy()
     counts = clean["_label"].value_counts()
@@ -60,14 +62,22 @@ def run(cfg, *, allow_synthetic=False):
     training, excluded = exclude_test_copies(frames["train"], frames["test"])
     test = frames["test"].copy()
     # Refresh membership against the ACTUAL pool, not the pre-cleaning official train CSV.
-    test["_overlaps_train"] = test["sha256"].isin(set(training["sha256"]))
+    test["_overlaps_train"] = (
+        test["sha256"].isin(set(training["sha256"]))
+        | test["_pixel_sha256"].isin(set(training["_pixel_sha256"]))
+    )
+    if test["_overlaps_train"].any():
+        raise ValueError("Test image pixels still overlap the actual training pool.")
     device = resolve_device(cfg["device"])
     output.mkdir(parents=True, exist_ok=True)
     run_metadata = {
         "protocol": PROTOCOL, "official_test_used_for_training": False,
         "evaluation_is_independent": True,
-        "independence_scope": "Held out from this fresh run; file-hash disjointness does not establish patient independence or undo prior test-set use.",
+        "independence_scope": "Held out from this fresh run; file/pixel disjointness does not establish patient independence or undo prior test-set use.",
         "batches_per_epoch": batches, "planned_optimizer_steps": epochs * batches,
+        "evaluation_status": "pending_training",
+        "test_samples": len(test),
+        "test_class_counts": [int((test["_label"] == k).sum()) for k in range(5)],
     }
     split = {
         "train": training["sample_id"].tolist(), "validation": [],
@@ -78,8 +88,10 @@ def run(cfg, *, allow_synthetic=False):
         "excluded_training_test_copies": excluded["sample_id"].tolist(),
         "unique_training_hashes": int(training["sha256"].nunique()),
         "class_counts": [int((training["_label"] == grade).sum()) for grade in range(5)],
-        "method": "official_train_only_exclude_exact_test_copies_no_validation",
-        "patient_grouping": "Patient identifiers are unavailable; SHA-256 only detects identical files.",
+        "method": "official_train_only_exclude_file_and_pixel_test_copies_no_validation",
+        "training_pixel_hashes": sorted(set(training["_pixel_sha256"])),
+        "test_pixel_hashes": test["_pixel_sha256"].tolist(),
+        "patient_grouping": "Patient IDs are unavailable; file and decoded-pixel hashes do not identify patients.",
     }
     save_json(output / "training_split.json", split)
     git_rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=hybrid.ROOT, capture_output=True, text=True)
@@ -96,7 +108,9 @@ def run(cfg, *, allow_synthetic=False):
         f"Model={cfg['model']['backbone']} pooling={cfg['model']['pooling']} "
         f"spatial_attention={cfg['model'].get('spatial_attention', False)}.\n"
         "Fresh initialization from the configured ImageNet weights; no old IDRiD checkpoint is loaded. "
-        "No validation/early stopping/test-based selection.", flush=True,
+        "No validation/early stopping/test-based selection.\n"
+        "Epoch accuracy is TRAIN accuracy, NOT TEST accuracy. "
+        "Use evaluation_metrics.json -> test only after [FINAL OFFICIAL TEST].", flush=True,
     )
     model, amp, summary = fit_all(
         training, manifest, cfg, output, device,
@@ -106,15 +120,18 @@ def run(cfg, *, allow_synthetic=False):
     model.load_state_dict(checkpoint["model"], strict=True)
     payload = hybrid.evaluate_test(
         model, test, manifest, cfg, output, device, amp, checkpoint_name="final.pt",
+        training_frame=training, require_heldout=True,
     )
     payload.update({
         **run_metadata, **summary, "checkpoint_selection": "final_epoch",
         "excluded_training_test_copies": excluded["sample_id"].tolist(),
         "per_class_accuracy_definition": "Correct predictions within each true class / that class's support (recall).",
+        "evaluation_status": "complete",
     })
     save_json(output / "evaluation_metrics.json", payload)
     metrics = json.loads((output / "metrics.json").read_text(encoding="utf-8"))
     metrics["test"] = payload["test"]
+    metrics["evaluation_status"] = "complete"
     save_json(output / "metrics.json", metrics)
     return payload
 

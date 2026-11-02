@@ -127,9 +127,11 @@ def fit_all(
         })
         save_json(output / "metrics.json", {
             **record, **run_metadata, "checkpoint_selection": "final_epoch",
+            "training_accuracy_is_not_test_accuracy": True,
+            "evaluation_status": "pending_training",
         })
         print(
-            f"epoch={epoch} phase={phase} {hybrid.loss_breakdown(metrics, cfg)} "
+            f"[TRAIN ONLY; TEST NOT EVALUATED] epoch={epoch} phase={phase} {hybrid.loss_breakdown(metrics, cfg)} "
             f"train_accuracy={metrics['accuracy']:.4f} train_mae={metrics['mae']:.4f}",
             flush=True,
         )
@@ -204,7 +206,13 @@ def evaluate_seen_test(model, frame, manifest, cfg, output, device, amp):
     return payload
 
 
-def run(cfg, *, allow_synthetic=False):
+def run(cfg, *, allow_synthetic=False, allow_test_training=False):
+    if not allow_test_training:
+        raise ValueError(
+            "This legacy diagnostic trains on official TEST and cannot produce held-out accuracy. "
+            "Use scripts/train_idrid_fixed_iterations.py (or train_idrid_balanced_softmax.py). "
+            "Only intentional resubstitution diagnostics may set --allow-test-training."
+        )
     cfg = copy.deepcopy(cfg)
     if int(cfg["data"]["image_size"]) != 224 or int(cfg["model"]["num_classes"]) != 5:
         raise ValueError("This IDRiD script requires 224x224 input and five DR grades.")
@@ -272,7 +280,10 @@ def main():
     parser.add_argument("--device")
     parser.add_argument("--num-workers", type=int)
     parser.add_argument("--epochs", type=int)
+    parser.add_argument("--allow-test-training", action="store_true", help="Explicitly run the legacy non-independent diagnostic; never a held-out test")
     args = parser.parse_args()
+    if not args.allow_test_training:
+        parser.error("Official TEST must stay held out. Run scripts/train_idrid_fixed_iterations.py --device cuda instead. Legacy diagnostics require --allow-test-training.")
     cfg = load_config(args.config)
     for name, section, key in (
         ("data_dir", "data", "data_dir"), ("output_dir", "train", "output_dir"),
@@ -283,7 +294,7 @@ def main():
             cfg[section][key] = str(value.resolve()) if isinstance(value, Path) else value
     if args.device is not None:
         cfg["device"] = args.device
-    run(cfg)
+    run(cfg, allow_test_training=args.allow_test_training)
 
 
 if __name__ == "__main__":

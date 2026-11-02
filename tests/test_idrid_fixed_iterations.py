@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import train_idrid as hybrid
 import train_idrid_fixed_iterations as heldout
+from report_idrid_test import report
 from eyepacs_hybrid_ordinal.idrid import OFFICIAL_COUNTS, prepare_idrid
 from eyepacs_hybrid_ordinal.utils import load_config
 from smoke_test_idrid import smoke_config, write_synthetic_dataset
@@ -152,6 +153,16 @@ def test_heldout_images_never_enter_training_and_steps_stay_fixed(tmp_path, monk
         assert class_metrics.iloc[grade].accuracy_percent == pytest.approx(stats["accuracy_percent"])
     assert payload["test"]["accuracy"] == pytest.approx((predictions.label == predictions.prediction_class).mean())
     assert np.asarray(payload["test"]["confusion_matrix"]).sum() == 10
+    assert payload["evaluation_status"] == "complete"
+    assert payload["training_overlap_checked_at_evaluation"] is True
+    assert report(output)["test"] == payload["test"]
+    # The result checker must detect stale/mismatched saved summary metrics.
+    damaged = json.loads((output / "evaluation_metrics.json").read_text())
+    damaged["test"]["accuracy"] += 0.1
+    (output / "evaluation_metrics.json").write_text(json.dumps(damaged))
+    with pytest.raises(ValueError, match="accuracy disagrees"):
+        report(output)
+    (output / "evaluation_metrics.json").write_text(json.dumps(payload))
     checkpoint = torch.load(output / "final.pt", weights_only=True)
     assert checkpoint["official_test_used_for_training"] is False
     assert checkpoint["optimizer_steps"] == 9

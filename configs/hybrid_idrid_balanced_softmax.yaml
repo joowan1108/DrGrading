@@ -79,4 +79,4 @@ train:
   scheduler_metric: train.rmse
   early_stopping_patience: null
   checkpoint_selection: final_epoch
-  output_dir: checkpoints/hybrid_idrid_bs_w0p1_train_only_fixed22_gem_no_spatial_seed42
+  output_dir: checkpoints/hybrid_idrid_bs_w0p1_train_only_fixed22_gem_no_spatial_audited_seed42

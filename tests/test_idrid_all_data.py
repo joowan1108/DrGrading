@@ -112,9 +112,9 @@ def test_all_data_training_no_validation_final_checkpoint_and_seen_test(tmp_path
     cfg["train"].update(epochs=3, early_stopping_patience=0)
     if duplicate:
         with pytest.warns(UserWarning, match="test images also occur in training"):
-            payload = all_data.run(cfg, allow_synthetic=True)
+            payload = all_data.run(cfg, allow_synthetic=True, allow_test_training=True)
     else:
-        payload = all_data.run(cfg, allow_synthetic=True)
+        payload = all_data.run(cfg, allow_synthetic=True, allow_test_training=True)
     output = tmp_path / "results"
     split = json.loads((output / "training_split.json").read_text())
     train_ids = set(split["train"])
@@ -167,15 +167,15 @@ def test_all_data_training_no_validation_final_checkpoint_and_seen_test(tmp_path
     assert "TRAIN-SEEN test subset (NOT independent)" in captured
     assert "[Phase 1 -> Phase 2]" in captured
     with pytest.raises(FileExistsError, match="not empty"):
-        all_data.run(cfg, allow_synthetic=True)
+        all_data.run(cfg, allow_synthetic=True, allow_test_training=True)
 
 
 def test_all_data_requires_no_validation_and_a_phase2_epoch(tmp_path):
     cfg = small_config(tmp_path)
     cfg["split"]["val_size"] = 0.2
     with pytest.raises(ValueError, match="NO internal validation"):
-        all_data.run(cfg)
+        all_data.run(cfg, allow_test_training=True)
     cfg["split"]["val_size"] = 0.0
     cfg["train"]["epochs"] = 1
     with pytest.raises(ValueError, match="Phase 2 can run"):
-        all_data.run(cfg)
+        all_data.run(cfg, allow_test_training=True)

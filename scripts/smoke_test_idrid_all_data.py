@@ -25,7 +25,7 @@ def main():
     prepare_idrid(work / "data" / "raw", work / "data" / "prepared", strict=False)
     cfg = smoke_config(work / "data", work / "results", ROOT / "configs/hybrid_idrid_all_data_no_spatial.yaml")
     cfg["split"]["val_size"] = 0.0
-    payload = run(cfg, allow_synthetic=True)
+    payload = run(cfg, allow_synthetic=True, allow_test_training=True)
     split = json.loads((work / "results" / "training_split.json").read_text())
     history = json.loads((work / "results" / "metrics_history.json").read_text())["epochs"]
     assert len(split["train"]) == 30 and split["validation"] == []

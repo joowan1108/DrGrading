@@ -44,7 +44,7 @@ def main():
         cfg["loss"]["classification_weight"] = args.classification_weight
         if args.output_dir is None:
             tag = str(args.classification_weight).replace(".", "p")
-            cfg["train"]["output_dir"] = f"checkpoints/hybrid_idrid_bs_w{tag}_train_only_fixed22_gem_no_spatial_seed{cfg['seed']}"
+            cfg["train"]["output_dir"] = f"checkpoints/hybrid_idrid_bs_w{tag}_train_only_fixed22_gem_no_spatial_audited_seed{cfg['seed']}"
     run(cfg)
 
 

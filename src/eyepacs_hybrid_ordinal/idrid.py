@@ -14,6 +14,8 @@ from collections import defaultdict
 from pathlib import Path
 from urllib.parse import unquote
 
+from PIL import Image, ImageOps
+
 DATASET = "aaryapatel98/indian-diabetic-retinopathy-image-dataset"
 OFFICIAL_COUNTS = {"train": [134, 20, 136, 74, 49], "test": [34, 5, 32, 19, 13]}
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
@@ -41,6 +43,15 @@ def digest(path: Path) -> str:
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             hasher.update(block)
+    return hasher.hexdigest()
+
+
+def pixel_digest(path: Path) -> str:
+    """Fingerprint decoded model-visible pixels, independent of file metadata."""
+    with Image.open(path) as image:
+        rgb = ImageOps.exif_transpose(image).convert("RGB")
+        hasher = hashlib.sha256(f"RGB:{rgb.width}x{rgb.height}:".encode())
+        hasher.update(rgb.tobytes())
     return hasher.hexdigest()
 
 
