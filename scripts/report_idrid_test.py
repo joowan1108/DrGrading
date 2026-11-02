@@ -59,6 +59,17 @@ def report(output: Path) -> dict:
     for grade, count in enumerate(counts):
         value = f"{100 * confusion[grade][grade] / count:.2f}%" if count else "N/A"
         print(f"Class {grade}: {value} ({confusion[grade][grade]}/{count})")
+    tsne = payload.get("tsne_correct_test")
+    if tsne is not None:
+        correct_count = sum(confusion[k][k] for k in range(5))
+        if tsne["correct_samples"] != correct_count or tsne["total_test_samples"] != n:
+            raise ValueError("t-SNE sample count does not match the correctly classified test subset.")
+        with (output / tsne["coordinates_file"]).open(newline="", encoding="utf-8") as handle:
+            coordinates = list(csv.DictReader(handle))
+        expected_ids = {row["sample_id"] for row in rows if row["label"] == row["prediction_class"]}
+        if len(coordinates) != correct_count or {row["sample_id"] for row in coordinates} != expected_ids:
+            raise ValueError("t-SNE includes incorrect/non-test samples or omits correct ones.")
+        print(f"t-SNE: {tsne['status']}, correct-only n={correct_count}/{n}; {output / tsne['image_file']}")
     return payload
 
 

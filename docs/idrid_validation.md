@@ -143,6 +143,8 @@ Classification head의 argmax로 평가 방식을 바꾸지 않는다.
 - `predictions.csv`: test 103장 각각의 `sample_id`, `split`, 정답, 예측 등급,
   연속 예측값, `overlaps_train`. 모든 행이 `test:*`/`official_test`여야 한다.
 - `per_class_metrics.csv`: 각 정답 클래스의 정답 수/표본 수와 정확도(recall), MAE.
+- `test_metrics.csv`: test 전체의 Accuracy, Macro Accuracy, QWK와 MAE 한 행.
+- `confusion_matrix.csv`: test 전체 5×5 혼동행렬.
 - `training_split.json`: 실제 train/test 멤버, 제외한 학습 사본, 픽셀 해시와 클래스 개수.
 - `run_config.json`: 실제 설정과 코드 commit, 원본 데이터 정보, 영상 재검사 결과.
 - `metrics_history.json`: 학습 경과. 여기에 있는 epoch 정확도를 test로 사용하지 않는다.
@@ -150,6 +152,49 @@ Classification head의 argmax로 평가 방식을 바꾸지 않는다.
 `report_idrid_test.py`는 test 멤버십/103장 분포를 검사하고, 저장 예측에서
 Accuracy·Macro·QWK·MAE·혼동행렬을 다시 계산해 summary와 일치하는지 확인한다.
 Train-only 로그만 있거나 `seen_test`인 예전 결과는 독립 test 점수로 출력하지 않는다.
+
+## Test 전체 성능과 정답 표본만의 t-SNE
+
+학습이 끝난 뒤 `final.pt`로 test를 평가할 때 위 지표와 함께 다음을 자동 저장한다.
+성능 지표는 **test 전체 103장**에서 계산한다. 클래스별 CSV에는 기존 정확도/MAE와
+함께 precision, recall, F1도 기록한다(정의할 수 없는 값은 빈 칸/null).
+
+| 파일 | 내용 |
+|---|---|
+| `tsne_test_correct_only.png` | 정답을 맞힌 test 표본만 사용한 600-dpi 그림 |
+| `tsne_test_correct_only.pdf` | 같은 그림의 벡터 PDF |
+| `tsne_test_correct_only.csv` | 포함한 test ID, 정답/예측, 2차원 좌표 |
+| `tsne_test_correct_only_embeddings.npz` | 정답 표본만의 고차원 특징과 ID |
+| `tsne_test_correct_only_metadata.json` | 전체/정답 개수, 클래스별 포함 개수, seed/PCA/perplexity |
+
+회귀 출력에 기존과 동일한 반올림과 0–4 제한을 적용해 정답 여부를 결정한다.
+PCOL/SCOL 출력을 각각 L2 정규화한 뒤 연결한 특징을 사용하며,
+**오답을 제외한 후에 PCA와 t-SNE를 적합**한다. Seed 42를 사용한다.
+정답이 없는 클래스도 범례와 metadata에 n=0으로 표시한다.
+정답이 3개 미만이거나 선택된 특징이 모두 같으면 좌표를 만들어내지 않고
+건너뛴 사유와 안내 그림을 저장한다.
+이 그림은 정답 부분집합의 정성적 시각화이며 전체 test의 클래스 분리도를 뜻하지 않는다.
+
+### 이미 학습이 끝났거나 이전 코드로 학습 중인 경우
+
+기존 학습을 다시 시작하거나 prepare할 필요가 없다. 현재 학습이 `final.pt`를
+저장한 후 다음 명령으로 **평가만** 실행한다. 저장된 모델 설정과 학습/test 목록을
+읽고, checkpoint를 그대로 재로딩한다. ImageNet 가중치도 다시 받지 않는다.
+
+```bash
+git pull --ff-only origin learnable_dist
+python scripts/evaluate_idrid_test.py \
+  --run-dir checkpoints/idrid_heldout_audited_seed42_run01 \
+  --device cuda
+python scripts/report_idrid_test.py \
+  checkpoints/idrid_heldout_audited_seed42_run01/test_analysis
+```
+
+`--run-dir`에는 실제 기존 결과 폴더를 지정한다. 기본 출력은 그 폴더 안의
+`test_analysis/`이며 원래 checkpoint/지표를 덮어쓰지 않는다.
+이미 분석한 폴더가 있으면 `--output-dir checkpoints/idrid_test_analysis_run02`처럼
+새 경로를 지정한다. BS 모델도 checkpoint의 설정으로 자동 구성한다.
+Train+test로 학습한 과거 `all_data` checkpoint는 독립 test로 바꾸어 평가하지 않는다.
 
 ## 과거 진단 runner
 

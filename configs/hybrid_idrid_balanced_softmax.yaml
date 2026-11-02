@@ -2,6 +2,9 @@
 # Use the same IDRiD data/update protocol as the previous train-only experiment.
 seed: 42
 device: auto
+evaluation:
+  tsne_correct_only: true
+  tsne_seed: 42
 provenance:
   source_branch: gem_no_spatial_0814_bs_ablation
   source_commit: 03fd7e064acbfb1e0062d009e6e413ccc58a4a41

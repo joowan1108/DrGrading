@@ -2,6 +2,9 @@
 # Preserve the previous 516-image run's 22 updates/epoch, even with fewer images.
 seed: 42
 device: auto
+evaluation:
+  tsne_correct_only: true
+  tsne_seed: 42
 data:
   data_dir: data/idrid
   image_size: 224

@@ -395,7 +395,14 @@ def test_metrics(predictions, labels):
     confusion = np.zeros((5, 5), dtype=int)
     np.add.at(confusion, (np.asarray(labels), classes), 1)
     metrics.update(samples=len(labels), accuracy_percent=100 * metrics["accuracy"], confusion_matrix=confusion.tolist())
-    for stats in metrics["per_class"].values():
+    for grade, stats in metrics["per_class"].items():
+        grade = int(grade)
+        true_positives = int(confusion[grade, grade])
+        predicted_support = int(confusion[:, grade].sum())
+        support = stats["support"]
+        stats["precision"] = true_positives / predicted_support if predicted_support else None
+        stats["recall"] = stats["accuracy"]
+        stats["f1"] = 2 * true_positives / (support + predicted_support) if support else None
         stats["accuracy_percent"] = None if stats["accuracy"] is None else 100 * stats["accuracy"]
     return metrics
 
@@ -404,12 +411,13 @@ def report_per_class(metrics, output, *, split_label="test"):
     """Report class recall (correct / true-class support), not class precision."""
     with (output / "per_class_metrics.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["class", "support", "correct_count", "accuracy", "accuracy_percent", "mae"])
+        writer.writerow(["class", "support", "correct_count", "accuracy", "accuracy_percent", "mae", "precision", "recall", "f1"])
         for grade in range(5):
             stats = metrics["per_class"][str(grade)]
             percent = stats["accuracy_percent"]
             writer.writerow([
                 grade, stats["support"], stats["correct_count"], stats["accuracy"], percent, stats["mae"],
+                stats["precision"], stats["recall"], stats["f1"],
             ])
             display = "N/A" if percent is None else f"{percent:.2f}%"
             print(
@@ -438,9 +446,19 @@ def evaluate_test(
     loader = make_loader(frame, manifest, cfg, training=False)
     model.eval()
     predictions, labels, ids = [], [], []
+    make_tsne = bool(cfg.get("evaluation", {}).get("tsne_correct_only", True))
+    embeddings, missing_embeddings = [], False
     for images, targets, image_ids in loader:
         with autocast(enabled=amp):
-            batch = model(images.to(device))["prediction"].float().cpu()
+            outputs = model(images.to(device))
+            batch = outputs["prediction"].float().cpu()
+        if make_tsne:
+            if "pcol" in outputs and "scol" in outputs:
+                pcol = torch.nn.functional.normalize(outputs["pcol"].float(), dim=1)
+                scol = torch.nn.functional.normalize(outputs["scol"].float(), dim=1)
+                embeddings.append(torch.cat((pcol, scol), dim=1).cpu())
+            else:
+                missing_embeddings = True
         if not torch.isfinite(batch).all():
             raise FloatingPointError("Non-finite test predictions; no metrics will be reported.")
         predictions.extend(batch.tolist())
@@ -475,6 +493,15 @@ def evaluate_test(
         },
     }
     save_json(output / "evaluation_metrics.json", payload)
+    with (output / "test_metrics.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["split", "samples", "accuracy", "accuracy_percent", "macro_accuracy", "macro_accuracy_percent", "qwk", "mae"])
+        writer.writerow(["official_test", len(labels), metrics["accuracy"], metrics["accuracy_percent"],
+                         metrics["macro_accuracy"], 100 * metrics["macro_accuracy"], metrics["quadratic_weighted_kappa"], metrics["mae"]])
+    with (output / "confusion_matrix.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["true_class", *[f"pred_C{k}" for k in range(5)]])
+        writer.writerows([grade, *row] for grade, row in enumerate(metrics["confusion_matrix"]))
     with (output / "predictions.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["image", "label", "prediction_continuous", "prediction_class", "absolute_error", "overlaps_train", "sample_id", "split"])
@@ -490,6 +517,16 @@ def evaluate_test(
         print(f"Test excluding train overlaps: Accuracy={filtered_metrics['accuracy_percent']:.2f}% MAE={filtered_metrics['mae']:.4f} N={filtered_metrics['samples']}")
     else:
         print("Test excluding train overlaps: unavailable (all test images overlap training).")
+    if make_tsne:
+        if missing_embeddings:
+            raise ValueError("The model must return PCOL and SCOL embeddings for test t-SNE.")
+        from eyepacs_hybrid_ordinal.idrid_analysis import save_correct_test_tsne
+
+        payload["tsne_correct_test"] = save_correct_test_tsne(
+            output, torch.cat(embeddings).numpy(), predictions, labels, ids, frame["sample_id"].tolist(),
+            seed=int(cfg.get("evaluation", {}).get("tsne_seed", cfg["seed"])),
+        )
+        save_json(output / "evaluation_metrics.json", payload)
     return payload
 
 
