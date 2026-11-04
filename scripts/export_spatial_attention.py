@@ -5,6 +5,8 @@ import argparse
 import copy
 import hashlib
 import json
+import pickle
+import shlex
 import sys
 from pathlib import Path
 
@@ -14,6 +16,7 @@ import torch
 from torch.nn import functional as F
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_SPATIAL_RUN = "hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384"
 sys.path.insert(0, str(ROOT / "src"))
 
 from eyepacs_hybrid_ordinal.data import load_eyepacs_dataframe, resolve_image_path
@@ -48,9 +51,77 @@ def resolve_run_directory(value: str | Path) -> Path:
         raise ValueError("Several folders have this run name; pass an absolute --run-dir:\n" + "\n".join(map(str, sorted(matches))))
     raise FileNotFoundError(
         f"Run directory not found: {requested.resolve()}. Use the actual EyePACS Spatial Attention "
-        "folder, e.g. hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2, "
-        "or pass --checkpoint /actual/path/best.pt."
+        f"folder, e.g. {DEFAULT_SPATIAL_RUN}, or pass --checkpoint /actual/path/best.pt. "
+        "Find actual checkpoints with: python scripts/export_spatial_attention.py --list-runs"
     )
+
+
+def saved_config(checkpoint, folder):
+    cfg = checkpoint.get("config")
+    if not isinstance(cfg, dict):
+        recorded = folder / "run_config.json"
+        cfg = json.loads(recorded.read_text())["config"] if recorded.is_file() else None
+    return cfg
+
+
+def list_runs(search_root=None):
+    """Inspect actual best.pt weights, rather than trusting experiment folder names."""
+    if search_root is None:
+        roots = {ROOT / "checkpoints"}
+        roots.update(project / "checkpoints" for project in ROOT.parent.iterdir() if project.is_dir())
+    else:
+        roots = {Path(search_root).expanduser().resolve()}
+    folders = set()
+    for root in roots:
+        if root.is_dir():
+            for filename in ["best.pt", "run_config.json"]:
+                folders.update(path.parent.resolve() for path in root.rglob(filename))
+    records = []
+    for folder in sorted(folders):
+        path = folder / "best.pt"
+        record = {"run_dir": str(folder), "checkpoint": str(path), "best_checkpoint_exists": path.is_file()}
+        try:
+            checkpoint = {}
+            if path.is_file():
+                try:
+                    checkpoint = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+                except RuntimeError as error:
+                    if "mmap" not in str(error):
+                        raise
+                    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+            cfg = saved_config(checkpoint, folder)
+            state = clean_state_dict_keys(checkpoint.get("model", checkpoint.get("state_dict", checkpoint)))
+            weight = state.get("spatial_attention.conv.weight")
+            flag = cfg.get("model", {}).get("spatial_attention", False) if isinstance(cfg, dict) else None
+            record.update(spatial_attention_config=flag, has_trained_spatial_weights=isinstance(weight, torch.Tensor),
+                          spatial_weight_shape=list(weight.shape) if isinstance(weight, torch.Tensor) else None)
+            if not path.is_file():
+                record["status"] = "BEST MISSING"
+            elif not isinstance(weight, torch.Tensor):
+                record["status"] = "NO SPATIAL WEIGHTS"
+            elif not isinstance(cfg, dict):
+                record["status"] = "CONFIG MISSING"
+            elif not flag:
+                record["status"] = "DISABLED IN SAVED CONFIG"
+            else:
+                record["status"] = "READY"
+                record["command"] = shlex.join([
+                    "python", "scripts/export_spatial_attention.py", "--checkpoint", str(path),
+                    "--class-id", "3", "--split", "val", "--device", "cuda",
+                    "--output-dir", "outputs/spatial_attention_class3",
+                ])
+        except (OSError, ValueError, KeyError, RuntimeError, TypeError, pickle.UnpicklingError, EOFError) as error:
+            record.update(status="INSPECTION FAILED", error=str(error))
+        records.append(record)
+        print(f"\n{path}\n  {record['status']} | config.spatial_attention="
+              f"{record.get('spatial_attention_config')} | trained_weights={record.get('has_trained_spatial_weights')}")
+        if "command" in record:
+            print(f"  {record['command']}")
+        if "error" in record:
+            print(f"  {record['error']}")
+    if not records:
+        print("No saved runs found. Set --search-root /actual/project/checkpoints to inspect another location.")
+    return records
 
 
 def checkpoint_and_config(args):
@@ -63,18 +134,15 @@ def checkpoint_and_config(args):
         )
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     state = clean_state_dict_keys(checkpoint.get("model", checkpoint.get("state_dict", checkpoint)))
+    cfg = load_config(args.config) if args.config else saved_config(checkpoint, path.parent)
     if "spatial_attention.conv.weight" not in state:
+        flag = cfg.get("model", {}).get("spatial_attention", False) if isinstance(cfg, dict) else None
         raise ValueError(
-            "This checkpoint has no trained Spatial Attention weights. "
-            "Choose a spatial_attention=true run; a no_spatial/GeM-only checkpoint cannot export this map."
+            f"This checkpoint has no trained Spatial Attention weights.\nCheckpoint: {path}\n"
+            f"Saved config: spatial_attention={flag}. A folder name containing 'spatial' does not enable attention.\n"
+            "Find actual trained candidates with: python scripts/export_spatial_attention.py --list-runs\n"
+            "IDRiD training can run separately with scripts/compare_idrid_best_eyepacs.py."
         )
-    if args.config:
-        cfg = load_config(args.config)
-    else:
-        cfg = checkpoint.get("config")
-        if not isinstance(cfg, dict):
-            recorded = path.parent / "run_config.json"
-            cfg = json.loads(recorded.read_text())["config"] if recorded.is_file() else None
     if not isinstance(cfg, dict):
         raise ValueError("No saved configuration found. Pass the training configuration with --config.")
     cfg = copy.deepcopy(cfg)
@@ -264,6 +332,8 @@ def parse_args(argv=None):
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--run-dir", help="Spatial Attention run directory containing best.pt.")
     source.add_argument("--checkpoint", help="Exact path to a Spatial Attention checkpoint.")
+    source.add_argument("--list-runs", action="store_true", help="List saved settings and actual spatial weights; no inference or training.")
+    parser.add_argument("--search-root", type=Path, help="For --list-runs; default: this and sibling projects' checkpoints/.")
     parser.add_argument("--config", help="Override/fallback training config; saved checkpoint config is the default.")
     parser.add_argument("--class-id", type=int, default=3, help="Ground-truth class, default: 3.")
     parser.add_argument("--split", choices=["val", "test"], default="val")
@@ -275,8 +345,16 @@ def parse_args(argv=None):
     parser.add_argument("--device", default="auto")
     parser.add_argument("--alpha", type=float, default=0.4)
     parser.add_argument("--output-dir", default="outputs/spatial_attention_class3")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.search_root is not None and not args.list_runs:
+        parser.error("--search-root requires --list-runs.")
+    return args
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    return list_runs(args.search_root) if args.list_runs else run(args)
 
 
 if __name__ == "__main__":
-    run(parse_args())
+    main()

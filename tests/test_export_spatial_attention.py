@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tarfile
 from pathlib import Path
 
 import numpy as np
@@ -116,6 +117,11 @@ def test_rejects_no_spatial_checkpoint_without_exporting_random_maps(experiment)
     with pytest.raises(ValueError, match="no trained Spatial Attention weights"):
         run(parse_args(["--checkpoint", str(no_spatial), "--device", "cpu", "--output-dir", str(output)]))
     assert not output.exists()
+    with pytest.raises(ValueError) as caught:
+        run(parse_args(["--checkpoint", str(no_spatial)]))
+    assert "spatial_attention=False" in str(caught.value)
+    assert str(no_spatial) in str(caught.value)
+    assert "--list-runs" in str(caught.value)
 
 
 def test_run_dir_and_explicit_image_selection(experiment):
@@ -146,7 +152,7 @@ def test_exact_run_is_found_in_sibling_and_data_paths_follow_checkpoint(experime
     checkpoint, cfg, tmp_path = experiment
     idrid_root, eyepacs_root = tmp_path / "DrGrading-idrid", tmp_path / "DrGrading"
     idrid_root.mkdir()
-    run_dir = eyepacs_root / "checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2"
+    run_dir = eyepacs_root / "checkpoints/hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384"
     run_dir.mkdir(parents=True)
     payload = torch.load(checkpoint, weights_only=True)
     payload["config"]["data"].update(labels_csv="data/eyepacs/trainLabels.csv", image_root="data/eyepacs/train")
@@ -161,6 +167,63 @@ def test_exact_run_is_found_in_sibling_and_data_paths_follow_checkpoint(experime
     other.mkdir(parents=True)
     with pytest.raises(ValueError, match="Several folders"):
         exporter.resolve_run_directory(f"checkpoints/{run_dir.name}")
+
+
+def test_default_spatial_run_matches_archived_training_settings():
+    import export_spatial_attention as exporter
+    import run_spatial_and_idrid_best as pipeline
+
+    # Real saved run metadata: the misleading name must never become the default again.
+    misleading = "hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2"
+    with tarfile.open(ROOT / "checkpoints.tar.gz") as archive:
+        wrong = json.load(archive.extractfile(f"checkpoints/{misleading}/run_config.json"))
+        correct = json.load(archive.extractfile(f"checkpoints/{exporter.DEFAULT_SPATIAL_RUN}/run_config.json"))
+    assert wrong["config"]["model"]["spatial_attention"] is False
+    assert correct["config"]["model"]["spatial_attention"] is True
+    assert pipeline.parse_args([]).spatial_run == f"checkpoints/{exporter.DEFAULT_SPATIAL_RUN}"
+
+
+def test_listing_checks_weights_and_settings_and_reports_real_inference_commands(experiment, monkeypatch, capsys):
+    import export_spatial_attention as exporter
+
+    checkpoint, cfg, tmp_path = experiment
+    root = tmp_path / "projects"
+    ready = root / "actual/checkpoints/e1_e2 real run"
+    misleading = root / "idrid/checkpoints/gem_spatial_cloc110-2"
+    missing = root / "idrid/checkpoints/spatial_missing_best"
+    disabled = root / "idrid/checkpoints/disabled"
+    unreadable = root / "idrid/checkpoints/unreadable"
+    for folder in [ready, misleading, missing, disabled, unreadable]:
+        folder.mkdir(parents=True)
+    payload = torch.load(checkpoint, weights_only=True)
+    torch.save(payload, ready / "best.pt")
+    cfg["model"]["spatial_attention"] = True
+    (missing / "run_config.json").write_text(json.dumps({"config": cfg}))
+    payload["config"]["model"]["spatial_attention"] = False
+    torch.save(payload, disabled / "best.pt")  # Config/weights disagree: never list as READY.
+    del payload["model"]["spatial_attention.conv.weight"]
+    torch.save(payload, misleading / "best.pt")
+    (unreadable / "best.pt").write_bytes(b"not a torch checkpoint")
+    monkeypatch.setattr(exporter, "ROOT", root / "idrid")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Listing must not instantiate a network, read images or run inference.")
+
+    monkeypatch.setattr(exporter, "HybridOrdinalNet", forbidden)
+    monkeypatch.setattr(exporter, "select_sample", forbidden)
+    records = exporter.main(["--list-runs"])
+    by_dir = {Path(row["run_dir"]): row for row in records}
+    assert by_dir[ready]["status"] == "READY"
+    assert by_dir[ready]["spatial_weight_shape"] == [1, 2, 7, 7]
+    assert f"'{ready / 'best.pt'}'" in by_dir[ready]["command"]  # Safe command for paths with spaces.
+    assert by_dir[misleading]["status"] == "NO SPATIAL WEIGHTS"
+    assert by_dir[misleading]["spatial_attention_config"] is False
+    assert by_dir[missing]["status"] == "BEST MISSING"
+    assert by_dir[disabled]["status"] == "DISABLED IN SAVED CONFIG"
+    assert by_dir[unreadable]["status"] == "INSPECTION FAILED"
+    assert sum("command" in row for row in records) == 1
+    assert "NO SPATIAL WEIGHTS" in capsys.readouterr().out
+    assert len(exporter.main(["--list-runs", "--search-root", str(ready)])) == 1
 
 
 def test_exports_nonconstant_sigmoid_values_without_rescaling_saved_array(experiment, monkeypatch):

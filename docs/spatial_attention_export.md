@@ -6,7 +6,7 @@ Spatial Attention 적용 실험의 `best.pt`로 추론을 한 번 수행합니�
 
 ```bash
 python scripts/export_spatial_attention.py \
-  --run-dir checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2 \
+  --run-dir checkpoints/hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384 \
   --class-id 3 \
   --split val \
   --device cuda \
@@ -14,6 +14,14 @@ python scripts/export_spatial_attention.py \
 ```
 
 체크포인트 위치가 다르면 `--run-dir` 대신 `--checkpoint /경로/best.pt`를 사용합니다. `--run-dir`은 그 폴더의 `best.pt`를 선택합니다. 기존 no_spatial 또는 GeM-only 체크포인트는 공간 주의 가중치가 없으므로 사용할 수 없습니다.
+
+`384_gem_spatial_cloc110-2`는 폴더명에 `spatial`이 있지만 실제 저장 설정은 `spatial_attention: false`입니다. 폴더명 대신 설정과 실제 가중치를 확인해야 합니다. 다음 명령은 네트워크 추론 없이 현재·옆 프로젝트의 실제 체크포인트를 검사하고, 사용 가능한 `READY` 항목의 절대 경로와 실행 명령을 출력합니다.
+
+```bash
+python scripts/export_spatial_attention.py --list-runs
+```
+
+다른 위치에 체크포인트가 있으면 `--search-root /실제/경로/checkpoints`를 추가합니다. `BEST MISSING`은 해당 폴더에 `best.pt`가 없음을, `NO SPATIAL WEIGHTS`는 실제 공간 주의 가중치가 없음을 의미합니다. 없는 가중치를 새로 초기화하여 학습된 Attention 맵으로 출력하지 않습니다.
 
 상대 경로의 폴더가 현재 checkout에 없으면 같은 상위 디렉터리의 다른 프로젝트에서 **이름이 정확히 같은** `checkpoints/실험명`을 찾습니다. 예를 들어 `DrGrading-idrid`에서 실행하더라도 옆 `DrGrading/checkpoints/실험명`을 찾을 수 있습니다. 후보가 여러 개면 절대 경로를 지정해야 합니다. 저장된 상대 데이터 경로는 체크포인트가 속한 프로젝트를 기준으로 해석합니다.
 

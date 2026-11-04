@@ -1,6 +1,14 @@
 # Spatial Attention 맵과 지정 모델의 IDRiD 비교 실험
 
-Spatial Attention에는 `hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2/best.pt`를 사용합니다. IDRiD에는 `hybrid_eyepacs_efficientnet_v2_s_384_gem_no_spatial`의 저장된 설정을 사용하며, Balanced Softmax와 Spatial Attention은 적용하지 않습니다.
+Spatial Attention에는 `hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384/best.pt`를 사용합니다. IDRiD에는 `hybrid_eyepacs_efficientnet_v2_s_384_gem_no_spatial`의 저장된 설정을 사용하며, Balanced Softmax와 Spatial Attention은 적용하지 않습니다.
+
+`hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2`는 이름과 달리 저장된 `run_config.json`에서 `spatial_attention: false`인 실험입니다. 이 체크포인트로는 학습된 Spatial Attention 맵을 추출할 수 없습니다. `checkpoints.tar.gz`의 원래 실행 기록과 `checkpoint_experiment_summary.md`에서도 이 설정을 확인할 수 있습니다. 원격에 존재하는 실제 가중치는 다음 명령으로 확인합니다.
+
+```bash
+python scripts/export_spatial_attention.py --list-runs
+```
+
+이 명령은 현재 프로젝트와 옆 프로젝트의 체크포인트 폴더를 찾아 `best.pt`의 실제 공간 주의 가중치와 저장 설정을 확인합니다. `READY`인 항목에는 절대 경로로 된 실행 명령을 출력합니다. `BEST MISSING`은 설정 파일은 있지만 실제 `best.pt`가 없는 상태이고, `NO SPATIAL WEIGHTS`는 체크포인트에 공간 주의 가중치가 없는 상태입니다. 다른 위치를 검색하려면 `--search-root /실제/경로/checkpoints`를 추가합니다.
 
 ## 한 번에 실행
 
@@ -9,7 +17,7 @@ Spatial Attention에는 `hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc11
 ```bash
 git pull --ff-only origin learnable_dist
 python scripts/run_spatial_and_idrid_best.py \
-  --spatial-run checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2 \
+  --spatial-run checkpoints/hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384 \
   --data-dir data/idrid \
   --device cuda \
   --output-dir outputs/spatial_and_idrid_best_seed42
@@ -94,7 +102,7 @@ Spatial Attention만 추출하려면:
 
 ```bash
 python scripts/export_spatial_attention.py \
-  --run-dir checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2 \
+  --run-dir checkpoints/hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384 \
   --class-id 3 --split val --device cuda \
   --output-dir outputs/spatial_attention_class3
 ```
@@ -108,5 +116,15 @@ python scripts/compare_idrid_best_eyepacs.py \
 ```
 
 하나만 실행할 때는 `--protocol train_only_heldout` 또는 `--protocol train_plus_test_seen`을 추가합니다. 결합 실행에서는 `--skip-spatial`로 맵 추출을 건너뛸 수 있습니다. 다른 Class 3 영상은 `--spatial-sample-index 1`로 선택합니다.
+
+앞선 실행이 Spatial Attention 단계에서 실패했다면 IDRiD 학습은 아직 시작되지 않은 상태입니다. IDRiD부터 실행하려면 기존 명령에 `--skip-spatial`을 추가합니다.
+
+```bash
+python scripts/run_spatial_and_idrid_best.py \
+  --skip-spatial \
+  --source-run checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_no_spatial \
+  --data-dir data/idrid --device cuda \
+  --output-dir outputs/spatial_and_idrid_best_seed42
+```
 
 출력 디렉터리는 새 경로를 사용합니다. 같은 설정으로 일부 실험이 **평가까지 완료된** 경우 `--skip-completed`를 추가하면 완료된 실험을 재사용하고 나머지 실험을 실행합니다. 미완료 학습을 이어서 훈련하는 옵션은 아니며, 중단된 학습은 새 출력 경로에서 시작해야 합니다.

@@ -195,8 +195,22 @@ def test_pipeline_passes_the_exact_spatial_run_then_both_idrid_protocols(tmp_pat
     pipeline.main(["--data-dir", str(tmp_path / "data"), "--device", "cuda", "--output-dir", str(tmp_path / "output")])
     assert [name for name, _ in calls] == ["spatial", "idrid"]
     spatial = calls[0][1]
-    assert spatial.run_dir.endswith("hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2")
+    assert spatial.run_dir.endswith("hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384")
     assert spatial.class_id == 3 and spatial.split == "val"
     assert calls[1][1]["data_dir"] == tmp_path / "data"
     assert calls[1][1]["output_dir"] == tmp_path / "output/idrid_comparison"
     assert calls[1][1]["epochs"] is None  # Inherit 75 from the pinned source, not the old 500.
+
+
+def test_pipeline_can_train_idrid_without_loading_any_spatial_checkpoint(tmp_path, monkeypatch):
+    prepared = tmp_path / "data/prepared"; prepared.mkdir(parents=True)
+    (prepared / "manifest.json").write_text("{}")
+    calls = []
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("--skip-spatial must not inspect or infer with a Spatial Attention checkpoint.")
+
+    monkeypatch.setattr(pipeline.spatial, "run", forbidden)
+    monkeypatch.setattr(pipeline.comparison, "run_comparison", lambda *args, **kwargs: calls.append(kwargs))
+    pipeline.main(["--skip-spatial", "--data-dir", str(tmp_path / "data"), "--device", "cuda"])
+    assert len(calls) == 1 and calls[0]["device"] == "cuda"

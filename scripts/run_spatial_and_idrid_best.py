@@ -11,7 +11,7 @@ import compare_idrid_best_eyepacs as comparison
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     spatial_source = parser.add_mutually_exclusive_group()
-    spatial_source.add_argument("--spatial-run", default="checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2")
+    spatial_source.add_argument("--spatial-run", default=f"checkpoints/{spatial.DEFAULT_SPATIAL_RUN}")
     spatial_source.add_argument("--spatial-checkpoint")
     parser.add_argument("--eyepacs-labels-csv")
     parser.add_argument("--eyepacs-image-root")
