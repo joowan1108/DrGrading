@@ -56,6 +56,8 @@ def direct_data(tmp_path):
 def test_hollow_boxes_align_to_original_pixels_and_leave_interiors_unpainted(tmp_path, spatial_checkpoint):
     image_path, mask_path = direct_data(tmp_path)
     output = tmp_path / "results"
+    output.mkdir()
+    (output / "metadata.json").write_text(json.dumps({"image_id": "previous_eyepacs_image"}))
     result = boxes.run(boxes.parse_args([
         "--checkpoint", str(spatial_checkpoint), "--image", str(image_path), "--mask", str(mask_path),
         "--true-class", "3", "--device", "cpu", "--output-dir", str(output),
@@ -81,6 +83,7 @@ def test_hollow_boxes_align_to_original_pixels_and_leave_interiors_unpainted(tmp
         assert (output / filename).stat().st_size > 0
     assert (output / "lesion_box_comparison.pdf").read_bytes().startswith(b"%PDF")
     assert json.loads((output / "lesion_box_metadata.json").read_text())["box_count"] == 2
+    assert json.loads((output / "metadata.json").read_text()) == result
 
 
 def test_masks_are_reoriented_with_the_image_and_not_resized_to_fit(tmp_path):

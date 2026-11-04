@@ -236,8 +236,9 @@ def run(args, *, allow_synthetic=False):
     report = {**provenance, "checkpoint": str(checkpoint_path), "checkpoint_sha256": digest(checkpoint_path),
               "checkpoint_epoch": checkpoint.get("epoch"), "model_config": cfg["model"],
               "input_size": int(cfg["data"]["image_size"]), "normalize": cfg["data"].get("normalize", "none"),
-              "image_path": str(image_path), "image_pixel_sha256": pixel_digest(image_path),
+              "image_id": image_path.stem, "image_path": str(image_path), "image_pixel_sha256": pixel_digest(image_path),
               "ground_truth_class": label, "predicted_class": prediction, "regression_prediction": score,
+              "correct": prediction == label if label is not None else None,
               "box_color": BOX_COLOR, "box_fill": False, "box_padding_original_pixels": args.box_padding,
               "box_line_width_original_pixels": line_width, "min_mask_area_pixels": args.min_mask_area,
               "box_count": len(boxes), "connectivity": 8, "coordinates": "EXIF-oriented original image; x1/y1 exclusive",
@@ -248,6 +249,7 @@ def run(args, *, allow_synthetic=False):
               "outputs": ["lesion_box_comparison.png", "lesion_box_comparison.pdf", "lesion_boxes_original.png",
                           "attention_lesion_boxes_original.png", "lesion_boxes.csv", "spatial_attention.npy"]}
     save_json(output / "lesion_box_metadata.json", report)
+    save_json(output / "metadata.json", report)
     print(f"Lesion boxes={len(boxes)} | image={image_path} | true={label} predicted={prediction}", flush=True)
     print(f"Saved: {output / 'lesion_box_comparison.pdf'}", flush=True)
     return report
