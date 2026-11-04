@@ -19,6 +19,8 @@ CPU가 기본값이며 `--device cuda` 또는 `--device auto`도 지원합니다
 
 기존 82.52% 예측이 재현되면 Class 0/1/2/3/4에서 각각 31/5/28/14/12장, 총 90장을 그립니다. 실제 선택은 새 추론 결과에 따라 결정합니다. 특징은 각각 L2 정규화한 PCOL·SCOL 투영 벡터를 연결하고, t-SNE seed는 42입니다.
 
+색상은 이전 EyePACS t-SNE와 동일하게 C0 파랑(`#1f77b4`), C1 주황(`#ff7f0e`), C2 초록(`#2ca02c`), C3 빨강(`#d62728`), C4 보라(`#9467bd`)를 사용합니다. 클래스가 그림에 빠져도 나머지 클래스의 색은 바뀌지 않습니다. 원래 EyePACS, IDRiD 정답 표본 전용 그림과 Class 1 전체 그림에서 같은 색상표를 공유합니다.
+
 출력 파일:
 
 - `evaluation_metrics.json`: test 전체 지표, 체크포인트 SHA256·epoch, 이전 정확도와의 차이
@@ -30,6 +32,19 @@ CPU가 기본값이며 `--device cuda` 또는 `--device auto`도 지원합니다
 - `tsne_metadata.json`: 선택 기준과 클래스별 포함 표본 수
 
 출력 폴더가 이미 사용 중이면 `--output-dir outputs/idrid_8252_class1_all_run02`처럼 새 경로를 지정합니다.
+
+## 기존 좌표를 유지하고 색상만 바꾸기
+
+이미 그린 그림의 점 위치와 포함 표본을 유지하려면 저장된 좌표 CSV를 사용합니다. 다음 명령은 재학습·재추론이나 PCA/t-SNE 계산을 하지 않습니다.
+
+```bash
+python scripts/recolor_tsne.py \
+  --coordinates outputs/idrid_8252_tsne_scaled/tsne_coordinates.csv \
+  --output-dir outputs/idrid_8252_tsne_original_colors \
+  --title 'IDRiD test (seen in training)'
+```
+
+`tsne_recolored.png`와 `.pdf`를 만들며, 좌표 원본은 `source_coordinates.csv`에 그대로 복사합니다. 기존 `tsne_test_correct_only.csv`나 `tsne_outer_test.csv`도 사용할 수 있습니다. `recolor_metadata.json`에는 원래 좌표 CSV의 경로·해시와 색상표를 기록합니다. 색상 변경은 모델의 예측이나 정확도·QWK를 변경하지 않습니다.
 
 ## 저장 특징의 스케일을 바꿔 다시 그리기
 

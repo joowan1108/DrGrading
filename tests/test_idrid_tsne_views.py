@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import idrid_seen_class1_tsne as analysis
 from idrid_tsne_views import save_view, save_sweep
+from eyepacs_hybrid_ordinal.plot_colors import DR_CLASS_COLORS
 
 
 def arrays():
@@ -33,6 +34,7 @@ def test_scaling_uses_only_selected_features_and_keeps_predictions_and_labels(tm
     assert report["selected_samples"] == 19 and report["included_incorrect_samples"] == 1
     assert report["selected_class_counts"]["1"] == 4
     assert report["scaling"] == scaling and report["perplexity"] == 10
+    assert report["class_colors"] == {str(k): color for k, color in enumerate(DR_CLASS_COLORS)}
     with np.load(tmp_path / "tsne_input.npz") as saved:
         np.testing.assert_array_equal(saved["selected_embeddings"], features[keep])
         np.testing.assert_array_equal(saved["predictions"], predictions[keep])

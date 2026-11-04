@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from eyepacs_hybrid_ordinal.utils import save_json
+from eyepacs_hybrid_ordinal.plot_colors import DR_CLASS_COLORS
 
 
 def save_view(features, targets, predictions, images, output, *, scaling="none", perplexity=30,
@@ -68,6 +69,7 @@ def save_view(features, targets, predictions, images, output, *, scaling="none",
                 "selected_class_counts": counts, "selected_samples": int(keep.sum()),
                 "included_incorrect_samples": int((~correct).sum()), "total_test_samples": len(targets),
                 "seed": int(seed), "embedding": "concat(L2(pcol), L2(scol))", "label_colors": "ground truth",
+                "class_colors": {str(k): color for k, color in enumerate(DR_CLASS_COLORS)},
                 "metrics_scope": "all test samples", "scaling": scaling, "perplexity_requested": float(perplexity),
                 "perplexity": effective_perplexity, "pca_components_requested": int(pca_components),
                 "pca_components": reduced.shape[1], "pca_explained_variance_ratio_sum": float(reducer.explained_variance_ratio_.sum()),
@@ -78,7 +80,7 @@ def save_view(features, targets, predictions, images, output, *, scaling="none",
     with plt.rc_context({"font.size": 7, "pdf.fonttype": 42}):
         figure, axis = plt.subplots(figsize=(3.5, 3.1))
         handles = []
-        for grade, color in enumerate(["#7F7F7F", "#0072B2", "#E69F00", "#CC79A7", "#D55E00"]):
+        for grade, color in enumerate(DR_CLASS_COLORS):
             for good, marker in [(True, "o"), (False, "x")]:
                 mask = (labels == grade) & (correct == good)
                 axis.scatter(xy[mask, 0], xy[mask, 1], c=color, marker=marker, s=point_size, linewidths=0.5, alpha=0.85)

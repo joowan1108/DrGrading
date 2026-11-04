@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from .utils import save_json
+from .plot_colors import DR_CLASS_COLORS
 
 
 def save_correct_test_tsne(
@@ -45,6 +46,7 @@ def save_correct_test_tsne(
         "test_class_counts": {str(k): int((targets == k).sum()) for k in range(5)},
         "correct_class_counts": {str(k): int((labels == k).sum()) for k in range(5)},
         "pca_components": None, "perplexity": None,
+        "class_colors": {str(k): color for k, color in enumerate(DR_CLASS_COLORS)},
         "image_file": f"{stem}.png", "pdf_file": f"{stem}.pdf",
         "coordinates_file": f"{stem}.csv", "embeddings_file": f"{stem}_embeddings.npz",
         "metadata_file": f"{stem}_metadata.json",
@@ -92,7 +94,6 @@ def save_correct_test_tsne(
     from matplotlib import pyplot as plt
     from matplotlib.lines import Line2D
 
-    colors = ["#7F7F7F", "#0072B2", "#E69F00", "#CC79A7", "#D55E00"]
     with plt.rc_context({"font.size": 7.5, "axes.titlesize": 8, "axes.labelsize": 7.5,
                          "pdf.fonttype": 42, "ps.fonttype": 42}):
         figure, axis = plt.subplots(figsize=(3.5, 3.0))
@@ -100,7 +101,7 @@ def save_correct_test_tsne(
         axis.set_title(f"IDRiD {scope_label}: correct predictions\nn = {count}/{n}", pad=7)
         if coordinates is not None:
             handles = []
-            for grade, color in enumerate(colors):
+            for grade, color in enumerate(DR_CLASS_COLORS):
                 mask = labels == grade
                 axis.scatter(coordinates[mask, 0], coordinates[mask, 1], c=color, s=14,
                              alpha=0.85, linewidths=0.25, edgecolors="white")

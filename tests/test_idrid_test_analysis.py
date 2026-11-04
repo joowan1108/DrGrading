@@ -22,6 +22,7 @@ import train_idrid as hybrid
 import evaluate_idrid_test as posthoc
 from eyepacs_hybrid_ordinal.idrid import prepare_idrid
 from eyepacs_hybrid_ordinal.idrid_analysis import save_correct_test_tsne
+from eyepacs_hybrid_ordinal.plot_colors import DR_CLASS_COLORS
 from eyepacs_hybrid_ordinal.utils import save_json
 from report_idrid_test import report
 from smoke_test_idrid import smoke_config, write_synthetic_dataset
@@ -62,6 +63,7 @@ def test_incorrect_samples_are_removed_before_pca_and_tsne(tmp_path, monkeypatch
     metadata = save_correct_test_tsne(tmp_path, features, predictions, targets, images, ids)
     assert calls == ["pca", "tsne"]
     assert metadata["correct_samples"] == 5 and metadata["excluded_incorrect_samples"] == 5
+    assert metadata["class_colors"] == {str(k): color for k, color in enumerate(DR_CLASS_COLORS)}
     assert metadata["correct_class_counts"] == {str(k): 1 for k in range(5)}
     frame = pd.read_csv(tmp_path / metadata["coordinates_file"])
     assert frame.sample_id.tolist() == ids[::2]

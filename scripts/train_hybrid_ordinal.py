@@ -561,6 +561,7 @@ def save_outer_test_tsne(
     import numpy as np
     from sklearn.decomposition import PCA
     from sklearn.manifold import TSNE
+    from eyepacs_hybrid_ordinal.plot_colors import DR_CLASS_COLORS
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -606,6 +607,7 @@ def save_outer_test_tsne(
             coordinates[mask, 1],
             s=12,
             alpha=0.7,
+            color=DR_CLASS_COLORS[int(label)],
             label=f"Class {label}",
         )
     axis.set(title=title, xlabel="t-SNE 1", ylabel="t-SNE 2")
