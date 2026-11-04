@@ -6,7 +6,7 @@ Spatial Attention 적용 실험의 `best.pt`로 추론을 한 번 수행합니�
 
 ```bash
 python scripts/export_spatial_attention.py \
-  --run-dir checkpoints/hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384 \
+  --run-dir checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2 \
   --class-id 3 \
   --split val \
   --device cuda \
@@ -14,6 +14,8 @@ python scripts/export_spatial_attention.py \
 ```
 
 체크포인트 위치가 다르면 `--run-dir` 대신 `--checkpoint /경로/best.pt`를 사용합니다. `--run-dir`은 그 폴더의 `best.pt`를 선택합니다. 기존 no_spatial 또는 GeM-only 체크포인트는 공간 주의 가중치가 없으므로 사용할 수 없습니다.
+
+상대 경로의 폴더가 현재 checkout에 없으면 같은 상위 디렉터리의 다른 프로젝트에서 **이름이 정확히 같은** `checkpoints/실험명`을 찾습니다. 예를 들어 `DrGrading-idrid`에서 실행하더라도 옆 `DrGrading/checkpoints/실험명`을 찾을 수 있습니다. 후보가 여러 개면 절대 경로를 지정해야 합니다. 저장된 상대 데이터 경로는 체크포인트가 속한 프로젝트를 기준으로 해석합니다.
 
 저장된 데이터 경로를 현재 컴퓨터에 맞게 지정하려면 다음 옵션을 추가합니다.
 

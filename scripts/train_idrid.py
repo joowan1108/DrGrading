@@ -26,7 +26,7 @@ from eyepacs_hybrid_ordinal.idrid import OFFICIAL_COUNTS, audit_duplicates, dige
 from eyepacs_hybrid_ordinal.losses import PrototypeContrastiveOrdinalLoss, WeightedSupervisedContrastiveOrdinalLoss
 from eyepacs_hybrid_ordinal.metrics import aggregate_predictions
 from eyepacs_hybrid_ordinal.models import HybridOrdinalNet
-from eyepacs_hybrid_ordinal.transforms import make_idrid_transform
+from eyepacs_hybrid_ordinal.transforms import make_idrid_transform, make_train_transform, make_eval_transform
 from eyepacs_hybrid_ordinal.utils import build_optimizer, load_config, resolve_device, save_checkpoint, save_json, set_seed, worker_count
 from train_hybrid_ordinal import build_learnable_margins, build_scheduler, evaluate, train_one_epoch
 
@@ -109,12 +109,21 @@ def load_prepared(data_dir: Path, *, allow_synthetic: bool = False):
 
 def make_loader(frame, manifest, cfg, *, training):
     data = cfg["data"]
+    profile = data.get("transform_profile", "idrid")
+    if profile == "eyepacs":
+        transform = (make_train_transform if training else make_eval_transform)(
+            image_size=int(data["image_size"]), normalize=data["normalize"],
+        )
+    elif profile == "idrid":
+        transform = make_idrid_transform(
+            training=training, normalize=data["normalize"], augmentation=data.get("augmentation"),
+        )
+    else:
+        raise ValueError(f"Unknown transform_profile: {profile}")
     dataset = EyePACSDataset(
         frame,
         image_root=manifest["image_root"],
-        transform=make_idrid_transform(
-            training=training, normalize=data["normalize"], augmentation=data.get("augmentation"),
-        ),
+        transform=transform,
         verify_images=True,
     )
     workers = worker_count(int(data["num_workers"]))

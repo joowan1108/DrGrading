@@ -1,0 +1,90 @@
+{
+  "source_run": "hybrid_eyepacs_efficientnet_v2_s_384_gem_no_spatial",
+  "config": {
+    "seed": 42,
+    "device": "auto",
+    "data": {
+      "labels_csv": "data/eyepacs/trainLabels.csv",
+      "image_root": "data/eyepacs/train",
+      "image_col": null,
+      "label_col": null,
+      "subject_col": null,
+      "image_size": 384,
+      "normalize": "imagenet",
+      "batch_size": 24,
+      "num_workers": 4,
+      "max_samples": null,
+      "verify_images": false,
+      "stratified_batches": true,
+      "stratified_min_samples_per_class": 2,
+      "regression_natural_batches": false
+    },
+    "split": {
+      "num_folds": 10,
+      "fold_index": 0,
+      "val_size": 0.2,
+      "subject_independent": true
+    },
+    "model": {
+      "backbone": "efficientnet_v2_s",
+      "pretrained_imagenet": true,
+      "projection_hidden_dim": 1280,
+      "projection_dim": 128,
+      "regression_input": "projection_concat",
+      "regression_hidden_dim": 1280,
+      "dropout": 0.2,
+      "num_classes": 5,
+      "spatial_attention": false,
+      "spatial_attention_kernel_size": 7,
+      "pooling": "gem"
+    },
+    "loss": {
+      "alpha": 0.1,
+      "beta": 0.1,
+      "rmse_weight": 1.0,
+      "mmnp_weight": 2.0,
+      "temperature": 1.0,
+      "ordinal_margin_scale": 1.0,
+      "normalize_ordinal_distance": false,
+      "square_ordinal_distance": true,
+      "learnable_ordinal_margins": true,
+      "margin_parameterization": "softplus",
+      "margin_init": 0.75,
+      "margin_init_min": 0.5,
+      "margin_init_max": 1.0,
+      "margin_init_jitter": 0.0,
+      "margin_min": 0.0,
+      "margin_lr": 1e-05,
+      "margin_phase1_min_epochs": 20,
+      "margin_phase1_max_epochs": 30,
+      "margin_convergence_tolerance": 0.001,
+      "margin_convergence_patience": 3,
+      "scol_objective": "logsumexp",
+      "pcol_updates_learnable_margins": false,
+      "scol_updates_learnable_margins": false,
+      "normalize_learnable_margin_mean": true,
+      "mmnp_reduction": "mean",
+      "reduction": "mean"
+    },
+    "train": {
+      "epochs": 75,
+      "optimizer": "adam",
+      "lr": 0.001,
+      "weight_decay": 0.0001,
+      "amp": true,
+      "max_grad_norm": 5.0,
+      "lr_plateau_factor": 0.2,
+      "lr_plateau_patience": 5,
+      "early_stopping_patience": 13,
+      "output_dir": "checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_no_spatial"
+    }
+  },
+  "source_validation": {
+    "accuracy": 0.8145161290322581,
+    "macro_accuracy": 0.5751732498192126,
+    "quadratic_weighted_kappa": 0.8106758546681406,
+    "mae": 0.23308032890575586
+  },
+  "source": "Saved EyePACS run configuration, not an IDRiD result.",
+  "training_weights_included": false
+}

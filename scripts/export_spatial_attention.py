@@ -29,9 +29,33 @@ def project_path(value: str | Path) -> Path:
     return path.resolve() if path.is_absolute() else (ROOT / path).resolve()
 
 
+def resolve_run_directory(value: str | Path) -> Path:
+    """Locate the exact named run in this checkout or sibling project checkouts."""
+    requested = Path(value).expanduser()
+    if requested.is_dir():
+        return requested.resolve()
+    matches = set()
+    if not requested.is_absolute():
+        name = requested.name
+        candidates = [ROOT / requested, ROOT / "checkpoints" / name, ROOT.parent / name]
+        candidates += [project / "checkpoints" / name for project in ROOT.parent.iterdir() if project.is_dir()]
+        matches = {candidate.resolve() for candidate in candidates if candidate.is_dir()}
+    if len(matches) == 1:
+        found = matches.pop()
+        print(f"Resolved exact run name: {found}", flush=True)
+        return found
+    if len(matches) > 1:
+        raise ValueError("Several folders have this run name; pass an absolute --run-dir:\n" + "\n".join(map(str, sorted(matches))))
+    raise FileNotFoundError(
+        f"Run directory not found: {requested.resolve()}. Use the actual EyePACS Spatial Attention "
+        "folder, e.g. hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2, "
+        "or pass --checkpoint /actual/path/best.pt."
+    )
+
+
 def checkpoint_and_config(args):
     path = (Path(args.checkpoint).expanduser() if args.checkpoint
-            else Path(args.run_dir).expanduser() / "best.pt").resolve()
+            else resolve_run_directory(args.run_dir) / "best.pt").resolve()
     if not path.is_file():
         raise FileNotFoundError(
             f"Checkpoint not found: {path}. Use the Spatial Attention run's best.pt, "
@@ -56,9 +80,13 @@ def checkpoint_and_config(args):
     cfg = copy.deepcopy(cfg)
     if not cfg["model"].get("spatial_attention", False):
         raise ValueError("The selected configuration disables Spatial Attention. Use the matching training config.")
+    checkpoint_root = next((parent.parent for parent in path.parents if parent.name == "checkpoints"), ROOT)
     for key in ["labels_csv", "image_root"]:
         if getattr(args, key):
-            cfg["data"][key] = getattr(args, key)
+            cfg["data"][key] = str(Path(getattr(args, key)).expanduser().resolve())
+        elif key in cfg["data"]:
+            configured = Path(cfg["data"][key]).expanduser()
+            cfg["data"][key] = str(configured if configured.is_absolute() else checkpoint_root / configured)
     return path, checkpoint, state, cfg
 
 
@@ -216,6 +244,7 @@ def run(args):
         "selection": "explicit image id" if args.image_id is not None else f"image-id order, index {args.sample_index}",
         "split_config": cfg.get("split", {}), "seed": int(cfg.get("seed", 42)), "model_config": cfg["model"],
         "input_size": size, "normalize": cfg["data"].get("normalize", "none"), "device": str(device),
+        "labels_csv": cfg["data"]["labels_csv"], "image_root": cfg["data"]["image_root"],
         "map": "sigmoid output of the trained spatial_attention.conv, applied by the model in this forward pass",
         "native_map_shape": list(gate.shape), "map_min": float(gate.min()), "map_max": float(gate.max()),
         "map_mean": float(gate.mean()), "map_std": float(gate.std(unbiased=False)), **display,

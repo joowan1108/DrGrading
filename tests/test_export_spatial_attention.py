@@ -136,8 +136,31 @@ def test_rejects_test_selection_when_training_has_no_outer_test(experiment):
 
 
 def test_missing_checkpoint_explains_expected_spatial_run(tmp_path):
-    with pytest.raises(FileNotFoundError, match="Spatial Attention run's best.pt"):
+    with pytest.raises(FileNotFoundError, match="actual EyePACS Spatial Attention"):
         run(parse_args(["--run-dir", str(tmp_path / "missing_run")]))
+
+
+def test_exact_run_is_found_in_sibling_and_data_paths_follow_checkpoint(experiment, monkeypatch):
+    import export_spatial_attention as exporter
+
+    checkpoint, cfg, tmp_path = experiment
+    idrid_root, eyepacs_root = tmp_path / "DrGrading-idrid", tmp_path / "DrGrading"
+    idrid_root.mkdir()
+    run_dir = eyepacs_root / "checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2"
+    run_dir.mkdir(parents=True)
+    payload = torch.load(checkpoint, weights_only=True)
+    payload["config"]["data"].update(labels_csv="data/eyepacs/trainLabels.csv", image_root="data/eyepacs/train")
+    torch.save(payload, run_dir / "best.pt")
+    monkeypatch.setattr(exporter, "ROOT", idrid_root)
+    args = parse_args(["--run-dir", f"checkpoints/{run_dir.name}"])
+    path, _, _, resolved = exporter.checkpoint_and_config(args)
+    assert path == run_dir / "best.pt"
+    assert Path(resolved["data"]["labels_csv"]) == eyepacs_root / "data/eyepacs/trainLabels.csv"
+    assert Path(resolved["data"]["image_root"]) == eyepacs_root / "data/eyepacs/train"
+    other = tmp_path / "other/checkpoints" / run_dir.name
+    other.mkdir(parents=True)
+    with pytest.raises(ValueError, match="Several folders"):
+        exporter.resolve_run_directory(f"checkpoints/{run_dir.name}")
 
 
 def test_exports_nonconstant_sigmoid_values_without_rescaling_saved_array(experiment, monkeypatch):

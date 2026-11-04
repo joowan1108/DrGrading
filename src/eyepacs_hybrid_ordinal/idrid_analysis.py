@@ -10,7 +10,7 @@ from .utils import save_json
 
 
 def save_correct_test_tsne(
-    output_dir: Path, embeddings, predictions, targets, image_ids, sample_ids, *, seed=42,
+    output_dir: Path, embeddings, predictions, targets, image_ids, sample_ids, *, seed=42, evaluation_scope=None,
 ) -> dict:
     features = np.asarray(embeddings, dtype=np.float32)
     predictions = np.asarray(predictions, dtype=np.float64)
@@ -50,6 +50,12 @@ def save_correct_test_tsne(
         "metadata_file": f"{stem}_metadata.json",
         "interpretation": "Correct-only qualitative visualization; does not represent separation of all test samples.",
     }
+    if evaluation_scope is not None:
+        if evaluation_scope not in {"heldout_test", "training_seen_test"}:
+            raise ValueError("Unknown t-SNE evaluation scope.")
+        metadata.update(evaluation_scope=evaluation_scope,
+                        official_test_used_for_training=evaluation_scope == "training_seen_test",
+                        evaluation_is_independent=evaluation_scope == "heldout_test")
     np.savez_compressed(
         output_dir / metadata["embeddings_file"], embeddings=selected, labels=labels,
         sample_ids=selected_ids, images=selected_images,
@@ -90,7 +96,8 @@ def save_correct_test_tsne(
     with plt.rc_context({"font.size": 7.5, "axes.titlesize": 8, "axes.labelsize": 7.5,
                          "pdf.fonttype": 42, "ps.fonttype": 42}):
         figure, axis = plt.subplots(figsize=(3.5, 3.0))
-        axis.set_title(f"IDRiD test: correct predictions\nn = {count}/{n}", pad=7)
+        scope_label = {"heldout_test": "held-out test", "training_seen_test": "training-seen test"}.get(evaluation_scope, "test")
+        axis.set_title(f"IDRiD {scope_label}: correct predictions\nn = {count}/{n}", pad=7)
         if coordinates is not None:
             handles = []
             for grade, color in enumerate(colors):
