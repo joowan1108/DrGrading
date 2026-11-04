@@ -89,9 +89,9 @@ def parse_args(argv=None):
     parser.add_argument("--classification-weight", type=float, default=0.1)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--num-workers", type=int)
-    parser.add_argument("--scaling", choices=["none", "standard", "whiten"], default="standard")
-    parser.add_argument("--perplexity", type=float, default=10)
-    parser.add_argument("--max-iter", type=int, default=3000)
+    parser.add_argument("--scaling", choices=["none", "standard", "whiten"], default="none")
+    parser.add_argument("--perplexity", type=float, default=30)
+    parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--tsne-sweep", action="store_true")
     return parser.parse_args(argv)
 

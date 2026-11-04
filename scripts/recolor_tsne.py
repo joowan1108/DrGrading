@@ -12,7 +12,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from eyepacs_hybrid_ordinal.plot_colors import DR_CLASS_COLORS
+from eyepacs_hybrid_ordinal.plot_colors import DR_CLASS_COLORS, TSNE_FIGURE_SIZE, TSNE_PNG_DPI, draw_tsne_classes
 from eyepacs_hybrid_ordinal.utils import save_json
 
 
@@ -37,33 +37,21 @@ def run(coordinates, output_dir, *, title="t-SNE", point_size=12):
     import matplotlib
     matplotlib.use("Agg")
     from matplotlib import pyplot as plt
-    from matplotlib.lines import Line2D
 
     output.mkdir(parents=True, exist_ok=True)
-    with plt.rc_context({"font.size": 7, "pdf.fonttype": 42}):
-        figure, axis = plt.subplots(figsize=(3.5, 3.1))
-        handles = []
-        for grade, color in enumerate(DR_CLASS_COLORS):
-            for matched, marker in [(True, "o"), (False, "x")]:
-                keep = (labels == grade) & (correct == matched)
-                axis.scatter(xy[keep, 0], xy[keep, 1], c=color, marker=marker, s=point_size, alpha=0.85, linewidths=0.5)
-            handles.append(Line2D([], [], color=color, marker="o", linestyle="None", markersize=4,
-                                  label=f"C{grade} (n={int((labels == grade).sum())})"))
-        if not correct.all():
-            handles.append(Line2D([], [], color="black", marker="x", linestyle="None", markersize=4, label="Incorrect"))
-        axis.set(title=title, xlabel="t-SNE 1", ylabel="t-SNE 2", xticks=[], yticks=[])
-        axis.set_aspect("equal", adjustable="datalim")
-        axis.spines[["top", "right"]].set_visible(False)
-        axis.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=3, frameon=False, fontsize=6)
-        figure.tight_layout(pad=0.8)
+    with plt.rc_context({"font.size": 10, "pdf.fonttype": 42}):
+        figure, axis = plt.subplots(figsize=TSNE_FIGURE_SIZE)
+        draw_tsne_classes(axis, xy, labels, title=title, point_size=point_size)
+        figure.tight_layout()
         for extension in ["png", "pdf"]:
-            figure.savefig(output / f"tsne_recolored.{extension}", dpi=600, bbox_inches="tight")
+            figure.savefig(output / f"tsne_recolored.{extension}", dpi=TSNE_PNG_DPI)
         plt.close(figure)
     shutil.copyfile(coordinates, output / "source_coordinates.csv")
     metadata = {"source_coordinates": str(coordinates), "source_coordinates_sha256": hashlib.sha256(coordinates.read_bytes()).hexdigest(),
                 "coordinate_values_changed": False, "samples": len(table), "included_incorrect_samples": int((~correct).sum()),
                 "class_colors": {str(k): color for k, color in enumerate(DR_CLASS_COLORS)}, "training_performed": False,
                 "inference_performed": False, "tsne_fitting_performed": False, "point_size": point_size, "title": title}
+    metadata.update(marker="o", point_alpha=0.7, axis_aspect="auto", figure_size_inches=list(TSNE_FIGURE_SIZE))
     save_json(output / "recolor_metadata.json", metadata)
     print(f"Saved original-color t-SNE without recalculating coordinates: {output}")
     return metadata

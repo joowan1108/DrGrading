@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from eyepacs_hybrid_ordinal.utils import save_json
-from eyepacs_hybrid_ordinal.plot_colors import DR_CLASS_COLORS
+from eyepacs_hybrid_ordinal.plot_colors import DR_CLASS_COLORS, TSNE_FIGURE_SIZE, TSNE_PNG_DPI, draw_tsne_classes
 
 
 def save_view(features, targets, predictions, images, output, *, scaling="none", perplexity=30,
@@ -20,7 +20,6 @@ def save_view(features, targets, predictions, images, output, *, scaling="none",
     import matplotlib
     matplotlib.use("Agg")
     from matplotlib import pyplot as plt
-    from matplotlib.lines import Line2D
 
     features, targets, predictions = np.asarray(features), np.asarray(targets), np.asarray(predictions)
     if (features.ndim != 2 or len(features) != len(targets) or len(images) != len(targets)
@@ -38,7 +37,8 @@ def save_view(features, targets, predictions, images, output, *, scaling="none",
     original = selected.copy()
     if scaling == "standard":
         selected = StandardScaler().fit_transform(selected)
-    reducer = PCA(n_components=min(pca_components, len(selected)-1, selected.shape[1]), svd_solver="full")
+    reducer = PCA(n_components=min(pca_components, len(selected)-1, selected.shape[1]),
+                  svd_solver="auto", random_state=int(seed))
     reduced = reducer.fit_transform(selected)
     if scaling == "whiten":
         # Drop numerically null components instead of amplifying them without bound.
@@ -73,29 +73,21 @@ def save_view(features, targets, predictions, images, output, *, scaling="none",
                 "metrics_scope": "all test samples", "scaling": scaling, "perplexity_requested": float(perplexity),
                 "perplexity": effective_perplexity, "pca_components_requested": int(pca_components),
                 "pca_components": reduced.shape[1], "pca_explained_variance_ratio_sum": float(reducer.explained_variance_ratio_.sum()),
+                "pca_svd_solver": "auto", "pca_svd_solver_effective": getattr(reducer, "_fit_svd_solver", None),
                 "max_iter": int(max_iter), "learning_rate": learning_rate, "early_exaggeration": early_exaggeration,
                 "method": "barnes_hut", "angle": float(estimator.angle),
+                "marker": "o", "point_alpha": 0.7, "figure_size_inches": list(TSNE_FIGURE_SIZE),
+                "png_dpi": TSNE_PNG_DPI, "axis_aspect": "auto",
                 "point_size": point_size, "kl_divergence": float(estimator.kl_divergence_),
                 "whitening_null_component_relative_threshold": 1e-8 if scaling == "whiten" else None}
     save_json(output / "tsne_metadata.json", metadata)
-    with plt.rc_context({"font.size": 7, "pdf.fonttype": 42}):
-        figure, axis = plt.subplots(figsize=(3.5, 3.1))
-        handles = []
-        for grade, color in enumerate(DR_CLASS_COLORS):
-            for good, marker in [(True, "o"), (False, "x")]:
-                mask = (labels == grade) & (correct == good)
-                axis.scatter(xy[mask, 0], xy[mask, 1], c=color, marker=marker, s=point_size, linewidths=0.5, alpha=0.85)
-            handles.append(Line2D([], [], color=color, marker="x" if grade == 1 and not correct[labels == grade].any() else "o",
-                                  linestyle="None", markersize=4, label=f"C{grade} (n={counts[str(grade)]})"))
-        handles.append(Line2D([], [], color="black", marker="x", linestyle="None", markersize=4, label="Incorrect C1"))
-        axis.set_title("IDRiD test (seen in training)\nC1: all; C0/2/3/4: correct", fontsize=8)
-        axis.set(xlabel="t-SNE 1", ylabel="t-SNE 2", xticks=[], yticks=[])
-        axis.set_aspect("equal", adjustable="datalim")
-        axis.spines[["top", "right"]].set_visible(False)
-        axis.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=3, frameon=False, fontsize=6)
-        figure.tight_layout(pad=0.8)
+    with plt.rc_context({"font.size": 10, "pdf.fonttype": 42}):
+        figure, axis = plt.subplots(figsize=TSNE_FIGURE_SIZE)
+        draw_tsne_classes(axis, xy, labels, title="IDRiD test (seen in training)\nC1: all; C0/2/3/4: correct",
+                          point_size=point_size)
+        figure.tight_layout()
         for extension in ["pdf", "png"]:
-            figure.savefig(output / f"tsne_class1_all_other_correct.{extension}", dpi=600, bbox_inches="tight")
+            figure.savefig(output / f"tsne_class1_all_other_correct.{extension}", dpi=TSNE_PNG_DPI)
         plt.close(figure)
     return metadata
 

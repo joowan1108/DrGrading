@@ -38,10 +38,10 @@ python scripts/train_idrid_seen_balanced_softmax.py \
 - `source_configuration_comparison.json`: 원래 비-BS 설정과 실제 BS 설정
 - `training_split.json`: train과 test를 포함한 학습 풀 목록
 - `analysis_class1_all/evaluation_metrics.json`: 재추론한 test 전체 지표
-- `analysis_class1_all/tsne_class1_all_other_correct.png` / `.pdf`: 기본 standard scaling, perplexity 10, 3000 iteration 보기
+- `analysis_class1_all/tsne_class1_all_other_correct.png` / `.pdf`: EyePACS와 같은 기본 none scaling, perplexity 30, 1000 iteration, Barnes–Hut 보기
 - `analysis_class1_all/sweep/tsne_sweep.png` / `.pdf`: 12개 설정 비교
 
-Class 1은 전부, 나머지 클래스는 정답 표본만 t-SNE에 사용합니다. 색상은 정답 클래스이며 Class 1 오분류는 ×입니다. 비-BS 모델에도 같은 scaling·perplexity·iteration을 사용해 비교합니다. BS에서 정답 표본 수가 달라지면 같은 선택 규칙으로 그림에 들어가는 표본 수도 달라집니다.
+Class 1은 전부, 나머지 클래스는 정답 표본만 t-SNE에 사용합니다. 색상은 정답 클래스이며, C1 오분류를 포함한 모든 점을 EyePACS와 같은 원형으로 표시합니다. 비-BS 모델에도 같은 scaling·perplexity·iteration을 사용해 비교합니다. BS에서 정답 표본 수가 달라지면 같은 선택 규칙으로 그림에 들어가는 표본 수도 달라집니다.
 
 학습은 끝났고 그림만 다시 만들려면 다음처럼 실행합니다.
 
@@ -49,6 +49,6 @@ Class 1은 전부, 나머지 클래스는 정답 표본만 t-SNE에 사용합니
 python scripts/idrid_seen_class1_tsne.py \
   --run-dir checkpoints/hybrid_idrid_all_data_gem_bs_matched_seed42 \
   --data-dir data/idrid --device cpu \
-  --scaling standard --perplexity 10 --max-iter 3000 --sweep \
+  --scaling none --perplexity 30 --max-iter 1000 --sweep \
   --output-dir outputs/idrid_bs_seen_analysis_run02
 ```

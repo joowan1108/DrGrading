@@ -161,7 +161,7 @@ Train-only 로그만 있거나 `seen_test`인 예전 결과는 독립 test 점�
 
 | 파일 | 내용 |
 |---|---|
-| `tsne_test_correct_only.png` | 정답을 맞힌 test 표본만 사용한 600-dpi 그림 |
+| `tsne_test_correct_only.png` | 정답을 맞힌 test 표본만 사용한 EyePACS 스타일의 9×7인치·200-dpi 그림 |
 | `tsne_test_correct_only.pdf` | 같은 그림의 벡터 PDF |
 | `tsne_test_correct_only.csv` | 포함한 test ID, 정답/예측, 2차원 좌표 |
 | `tsne_test_correct_only_embeddings.npz` | 정답 표본만의 고차원 특징과 ID |

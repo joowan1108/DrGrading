@@ -561,7 +561,7 @@ def save_outer_test_tsne(
     import numpy as np
     from sklearn.decomposition import PCA
     from sklearn.manifold import TSNE
-    from eyepacs_hybrid_ordinal.plot_colors import DR_CLASS_COLORS
+    from eyepacs_hybrid_ordinal.plot_colors import TSNE_FIGURE_SIZE, TSNE_PNG_DPI, draw_tsne_classes
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -599,23 +599,11 @@ def save_outer_test_tsne(
             )
         )
 
-    figure, axis = plt.subplots(figsize=(9, 7))
-    target_array = np.asarray(targets)
-    for label in sorted(np.unique(target_array)):
-        mask = target_array == label
-        axis.scatter(
-            coordinates[mask, 0],
-            coordinates[mask, 1],
-            s=12,
-            alpha=0.7,
-            color=DR_CLASS_COLORS[int(label)],
-            label=f"Class {label}",
-        )
-    axis.set(title=title, xlabel="t-SNE 1", ylabel="t-SNE 2")
-    axis.legend(title="True label", markerscale=1.5)
+    figure, axis = plt.subplots(figsize=TSNE_FIGURE_SIZE)
+    draw_tsne_classes(axis, coordinates, targets, title=title)
     figure.tight_layout()
     image_path = output_dir / f"{file_stem}.png"
-    figure.savefig(image_path, dpi=200)
+    figure.savefig(image_path, dpi=TSNE_PNG_DPI)
     plt.close(figure)
 
     embedding_metrics_path = output_dir / f"{file_stem}_embedding_metrics.json"

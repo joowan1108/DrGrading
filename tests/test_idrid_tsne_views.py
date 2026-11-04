@@ -43,6 +43,8 @@ def test_scaling_uses_only_selected_features_and_keeps_predictions_and_labels(tm
     assert report["selected_class_counts"]["1"] == 4
     assert report["scaling"] == scaling and report["perplexity"] == 10
     assert report["method"] == "barnes_hut" and methods == ["barnes_hut"]
+    assert report["pca_svd_solver"] == "auto" and report["marker"] == "o"
+    assert report["point_alpha"] == 0.7 and report["figure_size_inches"] == [9, 7]
     assert report["class_colors"] == {str(k): color for k, color in enumerate(DR_CLASS_COLORS)}
     with np.load(tmp_path / "tsne_input.npz") as saved:
         np.testing.assert_array_equal(saved["selected_embeddings"], features[keep])
@@ -94,3 +96,39 @@ def test_sweep_exports_all_scaling_perplexity_combinations(tmp_path, monkeypatch
 def test_rejects_invalid_tsne_options(tmp_path, options):
     with pytest.raises(ValueError, match="Invalid scaling"):
         save_view(*arrays(), tmp_path, **options)
+
+
+def test_default_idrid_matches_actual_eyepacs_coordinates_and_uses_circles_for_c1_errors(tmp_path, monkeypatch):
+    import pandas as pd
+    from PIL import Image
+    from matplotlib.axes import Axes
+    from train_hybrid_ordinal import save_outer_test_tsne
+
+    features, truth, pred, images = arrays()
+    keep = (truth == 1) | (truth == pred)
+    original = tmp_path / "eyepacs_reference"; original.mkdir()
+    candidate = tmp_path / "idrid"
+    reference = save_outer_test_tsne(original, features[keep], pred[keep].astype(float).tolist(),
+                                     truth[keep].tolist(), images[keep].tolist(), seed=42)
+    calls = []
+    real_scatter = Axes.scatter
+    def scatter(axis, x, y, *args, **kwargs):
+        calls.append(kwargs)
+        return real_scatter(axis, x, y, *args, **kwargs)
+    monkeypatch.setattr(Axes, "scatter", scatter)
+    metadata = save_view(features, truth, pred, images, candidate)
+    a = pd.read_csv(original / reference["coordinates_file"])
+    b = pd.read_csv(candidate / "tsne_coordinates.csv")
+    np.testing.assert_allclose(a[["tsne_x", "tsne_y"]], b[["tsne_x", "tsne_y"]], rtol=1e-6, atol=1e-6)
+    assert metadata["max_iter"] == 1000 and metadata["scaling"] == "none"
+    assert metadata["perplexity"] == min(30, len(b)-1)
+    assert metadata["included_incorrect_samples"] == 1
+    assert (b.label == 1).sum() == 4  # Removing the X must not remove the C1 mistakes.
+    assert len(calls) == 5 and all(call["marker"] == "o" and call["alpha"] == 0.7 and call["s"] == 12 for call in calls)
+    assert Image.open(original / reference["image_file"]).size == Image.open(candidate / "tsne_class1_all_other_correct.png").size == (1800, 1400)
+
+
+def test_bs_and_non_bs_cli_share_original_eyepacs_tsne_defaults():
+    import train_idrid_seen_balanced_softmax as runner
+    for args in [analysis.parse_args([]), runner.parse_args([])]:
+        assert args.scaling == "none" and args.perplexity == 30 and args.max_iter == 1000

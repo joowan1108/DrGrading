@@ -30,7 +30,7 @@ def test_recolor_keeps_all_coordinates_and_labels_without_fitting_tsne(tmp_path,
     real_scatter = Axes.scatter
     def scatter(axis, x, y, *args, **kwargs):
         if len(x):
-            calls.append((np.asarray(x), np.asarray(y), to_hex(kwargs["c"]), kwargs["marker"]))
+            calls.append((np.asarray(x), np.asarray(y), to_hex(kwargs["color"]), kwargs["marker"]))
         return real_scatter(axis, x, y, *args, **kwargs)
     def forbidden(*args, **kwargs):
         pytest.fail("Color changes must not fit t-SNE or PCA.")
@@ -46,7 +46,7 @@ def test_recolor_keeps_all_coordinates_and_labels_without_fitting_tsne(tmp_path,
         for xi, yi in zip(x, y):
             row = original[(original.tsne_x == xi) & (original.tsne_y == yi)].iloc[0]
             assert color == DR_CLASS_COLORS[int(row.label)]
-            assert marker == ("o" if row.label == row.prediction_class else "x")
+            assert marker == "o"  # C1 mistakes use the same circular marker as EyePACS.
     assert (tmp_path / "recolored/tsne_recolored.pdf").read_bytes().startswith(b"%PDF")
     assert json.loads((tmp_path / "recolored/recolor_metadata.json").read_text())["class_colors"] == {
         str(k): value for k, value in enumerate(DR_CLASS_COLORS)}

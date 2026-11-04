@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from .utils import save_json
-from .plot_colors import DR_CLASS_COLORS
+from .plot_colors import DR_CLASS_COLORS, TSNE_FIGURE_SIZE, TSNE_PNG_DPI, draw_tsne_classes
 
 
 def save_correct_test_tsne(
@@ -45,7 +45,9 @@ def save_correct_test_tsne(
         "total_test_samples": n, "correct_samples": count, "excluded_incorrect_samples": n - count,
         "test_class_counts": {str(k): int((targets == k).sum()) for k in range(5)},
         "correct_class_counts": {str(k): int((labels == k).sum()) for k in range(5)},
-        "pca_components": None, "perplexity": None, "method": "barnes_hut",
+        "pca_components": None, "perplexity": None, "method": "barnes_hut", "pca_svd_solver": "auto",
+        "max_iter": 1000, "marker": "o", "point_size": 12, "point_alpha": 0.7,
+        "figure_size_inches": list(TSNE_FIGURE_SIZE), "png_dpi": TSNE_PNG_DPI, "axis_aspect": "auto",
         "class_colors": {str(k): color for k, color in enumerate(DR_CLASS_COLORS)},
         "image_file": f"{stem}.png", "pdf_file": f"{stem}.pdf",
         "coordinates_file": f"{stem}.csv", "embeddings_file": f"{stem}_embeddings.npz",
@@ -73,7 +75,7 @@ def save_correct_test_tsne(
         from sklearn.manifold import TSNE
 
         components = min(50, selected.shape[1], count - 1)
-        reduced = PCA(n_components=components, svd_solver="full").fit_transform(selected)
+        reduced = PCA(n_components=components, svd_solver="auto", random_state=int(seed)).fit_transform(selected)
         perplexity = min(30.0, float(count - 1))
         coordinates = TSNE(
             n_components=2, perplexity=perplexity, learning_rate="auto",
@@ -92,33 +94,22 @@ def save_correct_test_tsne(
     import matplotlib
     matplotlib.use("Agg")
     from matplotlib import pyplot as plt
-    from matplotlib.lines import Line2D
 
-    with plt.rc_context({"font.size": 7.5, "axes.titlesize": 8, "axes.labelsize": 7.5,
-                         "pdf.fonttype": 42, "ps.fonttype": 42}):
-        figure, axis = plt.subplots(figsize=(3.5, 3.0))
+    with plt.rc_context({"font.size": 10, "pdf.fonttype": 42, "ps.fonttype": 42}):
+        figure, axis = plt.subplots(figsize=TSNE_FIGURE_SIZE)
         scope_label = {"heldout_test": "held-out test", "training_seen_test": "training-seen test"}.get(evaluation_scope, "test")
-        axis.set_title(f"IDRiD {scope_label}: correct predictions\nn = {count}/{n}", pad=7)
+        title = f"IDRiD {scope_label}: correct predictions\nn = {count}/{n}"
         if coordinates is not None:
-            handles = []
-            for grade, color in enumerate(DR_CLASS_COLORS):
-                mask = labels == grade
-                axis.scatter(coordinates[mask, 0], coordinates[mask, 1], c=color, s=14,
-                             alpha=0.85, linewidths=0.25, edgecolors="white")
-                handles.append(Line2D([], [], color=color, marker="o", linestyle="None", markersize=4,
-                                      label=f"C{grade} (n={int(mask.sum())})"))
-            axis.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.13),
-                        ncol=3, frameon=False, handletextpad=0.3, columnspacing=0.8, fontsize=6.5)
-            axis.set(xlabel="t-SNE 1", ylabel="t-SNE 2", xticks=[], yticks=[])
-            axis.spines[["top", "right"]].set_visible(False)
+            draw_tsne_classes(axis, coordinates, labels, title=title)
         else:
+            axis.set_title(title)
             axis.text(0.5, 0.5, "t-SNE unavailable\n" + (
                 "Fewer than 3 correct test samples" if count < 3 else "Selected features are identical"
             ), ha="center", va="center", transform=axis.transAxes)
             axis.set_axis_off()
-        figure.tight_layout(pad=0.8)
-        figure.savefig(output_dir / metadata["image_file"], dpi=600, bbox_inches="tight", facecolor="white")
-        figure.savefig(output_dir / metadata["pdf_file"], bbox_inches="tight", facecolor="white")
+        figure.tight_layout()
+        figure.savefig(output_dir / metadata["image_file"], dpi=TSNE_PNG_DPI, facecolor="white")
+        figure.savefig(output_dir / metadata["pdf_file"], facecolor="white")
         plt.close(figure)
     save_json(output_dir / metadata["metadata_file"], metadata)
     print(f"[TEST t-SNE] {metadata['status']}: correct={count}/{n}, per class={metadata['correct_class_counts']}", flush=True)
