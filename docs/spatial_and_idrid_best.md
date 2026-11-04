@@ -1,6 +1,6 @@
 # Spatial Attention 맵과 지정 모델의 IDRiD 비교 실험
 
-Spatial Attention에는 `hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384/best.pt`를 사용합니다. IDRiD에는 `hybrid_eyepacs_efficientnet_v2_s_384_gem_no_spatial`의 저장된 설정을 사용하며, Balanced Softmax와 Spatial Attention은 적용하지 않습니다.
+Spatial Attention에는 사용자가 선택한 `DrGrading/checkpoints/hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam/best.pt`를 사용합니다. 이 실험은 입력 300×300, `[0,1]` 전처리, Average Pooling, Spatial Attention 적용 설정입니다. IDRiD에는 `hybrid_eyepacs_efficientnet_v2_s_384_gem_no_spatial`의 저장된 설정을 사용하며, 입력 384×384와 GeM을 사용하고 Balanced Softmax와 Spatial Attention은 적용하지 않습니다. 맵 추출용 체크포인트는 IDRiD 학습 가중치나 설정으로 전달하지 않습니다.
 
 `hybrid_eyepacs_efficientnet_v2_s_384_gem_spatial_cloc110-2`는 이름과 달리 저장된 `run_config.json`에서 `spatial_attention: false`인 실험입니다. 이 체크포인트로는 학습된 Spatial Attention 맵을 추출할 수 없습니다. `checkpoints.tar.gz`의 원래 실행 기록과 `checkpoint_experiment_summary.md`에서도 이 설정을 확인할 수 있습니다. 원격에 존재하는 실제 가중치는 다음 명령으로 확인합니다.
 
@@ -17,13 +17,17 @@ python scripts/export_spatial_attention.py --list-runs
 ```bash
 git pull --ff-only origin learnable_dist
 python scripts/run_spatial_and_idrid_best.py \
-  --spatial-run checkpoints/hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384 \
+  --spatial-run ../DrGrading/checkpoints/hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam \
+  --source-run checkpoints/hybrid_eyepacs_efficientnet_v2_s_384_gem_no_spatial \
   --data-dir data/idrid \
   --device cuda \
-  --output-dir outputs/spatial_and_idrid_best_seed42
+  --output-dir outputs/spatial_and_idrid_best_seed42 \
+  --skip-completed
 ```
 
 먼저 EyePACS 검증 세트에서 **정답이 Class 3인 한 장**을 추론하여 실제 공간 가중치를 원본 안저 영상에 중첩합니다. 이어서 IDRiD의 두 모델을 각각 새로 학습하고 최종 평가와 t-SNE를 저장합니다.
+
+위 경로는 `DrGrading-idrid`와 `DrGrading`이 같은 상위 폴더에 있을 때의 예시입니다. 기본 실험명도 위 CBAM 실험으로 지정되어 있으므로, `--spatial-run`을 생략하면 같은 이름의 폴더를 현재·옆 프로젝트에서 찾습니다. `--skip-completed`는 같은 설정으로 평가까지 끝난 IDRiD 실험을 재학습하지 않고 재사용합니다.
 
 Spatial Attention 폴더는 현재 checkout과 옆 프로젝트들의 `checkpoints/`에서 정확한 이름으로 찾습니다. 위치가 다르거나 같은 이름의 폴더가 여러 개면 `--spatial-run` 대신 `--spatial-checkpoint /실제/경로/best.pt`를 사용합니다. 저장된 EyePACS 영상 경로를 바꾸려면 `--eyepacs-labels-csv /경로/trainLabels.csv --eyepacs-image-root /경로/train`을 추가합니다. 기존 IDRiD 준비 파일이 다른 곳에 있으면 `--data-dir`만 바꿉니다.
 
@@ -102,7 +106,7 @@ Spatial Attention만 추출하려면:
 
 ```bash
 python scripts/export_spatial_attention.py \
-  --run-dir checkpoints/hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384 \
+  --run-dir ../DrGrading/checkpoints/hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam \
   --class-id 3 --split val --device cuda \
   --output-dir outputs/spatial_attention_class3
 ```

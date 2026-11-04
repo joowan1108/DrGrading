@@ -191,11 +191,17 @@ def test_pipeline_passes_the_exact_spatial_run_then_both_idrid_protocols(tmp_pat
     (prepared / "manifest.json").write_text("{}")
     calls = []
     monkeypatch.setattr(pipeline.spatial, "run", lambda args: calls.append(("spatial", args)))
-    monkeypatch.setattr(pipeline.comparison, "run_comparison", lambda *args, **kwargs: calls.append(("idrid", kwargs)))
+    def record_comparison(source, provenance, **kwargs):
+        assert source["data"]["image_size"] == 384
+        assert source["model"]["pooling"] == "gem" and source["model"]["spatial_attention"] is False
+        assert not source["model"].get("balanced_softmax", False)
+        assert provenance["source_run"] == "hybrid_eyepacs_efficientnet_v2_s_384_gem_no_spatial"
+        calls.append(("idrid", kwargs))
+    monkeypatch.setattr(pipeline.comparison, "run_comparison", record_comparison)
     pipeline.main(["--data-dir", str(tmp_path / "data"), "--device", "cuda", "--output-dir", str(tmp_path / "output")])
     assert [name for name, _ in calls] == ["spatial", "idrid"]
     spatial = calls[0][1]
-    assert spatial.run_dir.endswith("hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384")
+    assert spatial.run_dir.endswith("hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam")
     assert spatial.class_id == 3 and spatial.split == "val"
     assert calls[1][1]["data_dir"] == tmp_path / "data"
     assert calls[1][1]["output_dir"] == tmp_path / "output/idrid_comparison"

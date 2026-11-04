@@ -16,7 +16,7 @@ import torch
 from torch.nn import functional as F
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SPATIAL_RUN = "hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384"
+DEFAULT_SPATIAL_RUN = "hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam"
 sys.path.insert(0, str(ROOT / "src"))
 
 from eyepacs_hybrid_ordinal.data import load_eyepacs_dataframe, resolve_image_path

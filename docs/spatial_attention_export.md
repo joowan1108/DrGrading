@@ -6,7 +6,7 @@ Spatial Attention 적용 실험의 `best.pt`로 추론을 한 번 수행합니�
 
 ```bash
 python scripts/export_spatial_attention.py \
-  --run-dir checkpoints/hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384 \
+  --run-dir ../DrGrading/checkpoints/hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam \
   --class-id 3 \
   --split val \
   --device cuda \
@@ -14,6 +14,8 @@ python scripts/export_spatial_attention.py \
 ```
 
 체크포인트 위치가 다르면 `--run-dir` 대신 `--checkpoint /경로/best.pt`를 사용합니다. `--run-dir`은 그 폴더의 `best.pt`를 선택합니다. 기존 no_spatial 또는 GeM-only 체크포인트는 공간 주의 가중치가 없으므로 사용할 수 없습니다.
+
+위 CBAM 실험은 입력 300×300, 정규화 `none`(`[0,1]` 영상), Average Pooling을 사용합니다. 맵 추출 시 체크포인트의 저장 설정을 그대로 사용합니다. 위 상대 경로는 `DrGrading-idrid`와 `DrGrading`이 같은 상위 폴더에 있을 때의 예시입니다.
 
 `384_gem_spatial_cloc110-2`는 폴더명에 `spatial`이 있지만 실제 저장 설정은 `spatial_attention: false`입니다. 폴더명 대신 설정과 실제 가중치를 확인해야 합니다. 다음 명령은 네트워크 추론 없이 현재·옆 프로젝트의 실제 체크포인트를 검사하고, 사용 가능한 `READY` 항목의 절대 경로와 실행 명령을 출력합니다.
 

@@ -161,7 +161,7 @@ def test_exact_run_is_found_in_sibling_and_data_paths_follow_checkpoint(experime
     checkpoint, cfg, tmp_path = experiment
     idrid_root, eyepacs_root = tmp_path / "DrGrading-idrid", tmp_path / "DrGrading"
     idrid_root.mkdir()
-    run_dir = eyepacs_root / "checkpoints/hybrid_eyepacs_efficientnet_v2_s_e1_e2_gem384"
+    run_dir = eyepacs_root / "checkpoints/hybrid_eyepacs_efficientnet_v2_s_softplus_squared_mmnp_spatial_cbam"
     run_dir.mkdir(parents=True)
     payload = torch.load(checkpoint, weights_only=True)
     payload["config"]["data"].update(labels_csv="data/eyepacs/trainLabels.csv", image_root="data/eyepacs/train")
@@ -189,7 +189,25 @@ def test_default_spatial_run_matches_archived_training_settings():
         correct = json.load(archive.extractfile(f"checkpoints/{exporter.DEFAULT_SPATIAL_RUN}/run_config.json"))
     assert wrong["config"]["model"]["spatial_attention"] is False
     assert correct["config"]["model"]["spatial_attention"] is True
+    assert correct["config"]["data"]["image_size"] == 300
+    assert correct["config"]["data"]["normalize"] == "none"
+    assert correct["config"]["model"].get("pooling", "avg") == "avg"
     assert pipeline.parse_args([]).spatial_run == f"checkpoints/{exporter.DEFAULT_SPATIAL_RUN}"
+
+
+def test_export_respects_legacy_300_input_and_average_pooling(experiment):
+    checkpoint, _, tmp_path = experiment
+    payload = torch.load(checkpoint, weights_only=True)
+    payload["config"]["data"].update(image_size=300, normalize="none")
+    del payload["config"]["model"]["pooling"]  # Before GeM was introduced, pooling was not saved.
+    del payload["model"]["global_pool.p"]
+    legacy = tmp_path / "legacy_spatial.pt"
+    torch.save(payload, legacy)
+    output = tmp_path / "legacy_maps"
+    report = run(parse_args(["--checkpoint", str(legacy), "--device", "cpu", "--output-dir", str(output)]))
+    assert report["input_size"] == 300 and report["normalize"] == "none"
+    assert Image.open(output / "input.png").size == (300, 300)
+    assert (output / "overlay_original.png").is_file()
 
 
 def test_listing_checks_weights_and_settings_and_reports_real_inference_commands(experiment, monkeypatch, capsys):
