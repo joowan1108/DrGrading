@@ -397,7 +397,7 @@ def parse_args(argv=None):
     source.add_argument("--list-runs", action="store_true", help="List saved settings and actual spatial weights; no inference or training.")
     parser.add_argument("--search-root", type=Path, help="For --list-runs; default: this and sibling projects' checkpoints/.")
     parser.add_argument("--validation-accuracy", action="store_true",
-                        help="With --list-runs: show only checkpoints with spatial weights, with validation Acc and C0-C4 (%).")
+                        help="With --list-runs: show only checkpoints with spatial weights, with validation Acc and C0-C4 in percent.")
     parser.add_argument("--config", help="Override/fallback training config; saved checkpoint config is the default.")
     parser.add_argument("--class-id", type=int, default=3, help="Ground-truth class, default: 3.")
     parser.add_argument("--split", choices=["val", "test"], default="val")

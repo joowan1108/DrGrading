@@ -23,6 +23,15 @@ from eyepacs_hybrid_ordinal.splitting import build_nested_split_indices
 from eyepacs_hybrid_ordinal.transforms import CropBlackBorder
 
 
+def test_cli_help_renders_all_argument_descriptions(capsys):
+    # Help interpolation also catches malformed percent strings on Python < 3.14.
+    with pytest.raises(SystemExit) as caught:
+        parse_args(["--help"])
+    assert caught.value.code == 0
+    output = capsys.readouterr().out
+    assert "--validation-accuracy" in output and "C0-C4 in percent" in output
+
+
 @pytest.fixture
 def experiment(tmp_path):
     torch.set_num_threads(1)
