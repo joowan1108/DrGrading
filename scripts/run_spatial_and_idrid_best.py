@@ -5,6 +5,7 @@ import argparse
 from pathlib import Path
 
 import export_spatial_attention as spatial
+import export_spatial_lesion_boxes as lesion_boxes
 import compare_idrid_best_eyepacs as comparison
 
 
@@ -16,6 +17,9 @@ def parse_args(argv=None):
     parser.add_argument("--eyepacs-labels-csv")
     parser.add_argument("--eyepacs-image-root")
     parser.add_argument("--spatial-sample-index", type=int, default=0)
+    parser.add_argument("--lesion-boxes", action="store_true", help="Use an IDRiD mask-bearing image and draw hollow lesion boxes.")
+    parser.add_argument("--segmentation-root", type=Path)
+    parser.add_argument("--segmentation-split", choices=["train", "test", "all"], default="test")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--source-config", type=Path, default=comparison.SOURCE)
     source.add_argument("--source-run", type=Path)
@@ -40,13 +44,21 @@ def main(argv=None):
     if not args.skip_spatial:
         options = (["--checkpoint", args.spatial_checkpoint] if args.spatial_checkpoint
                    else ["--run-dir", args.spatial_run])
-        options += ["--class-id", "3", "--split", "val", "--sample-index", str(args.spatial_sample_index),
+        options += ["--class-id", "3", "--sample-index", str(args.spatial_sample_index),
                     "--device", args.device, "--output-dir", str(args.output_dir / "spatial_class3")]
-        for flag, value in [("--labels-csv", args.eyepacs_labels_csv), ("--image-root", args.eyepacs_image_root)]:
-            if value is not None:
-                options += [flag, value]
-        print("[1/2] Spatial Attention: one ground-truth Class 3 EyePACS validation image", flush=True)
-        spatial.run(spatial.parse_args(options))
+        if args.lesion_boxes:
+            options += ["--idrid-dir", str(args.data_dir), "--segmentation-split", args.segmentation_split]
+            if args.segmentation_root is not None:
+                options += ["--segmentation-root", str(args.segmentation_root)]
+            print("[1/2] Spatial Attention + actual IDRiD lesion-mask boxes: one Class 3 image", flush=True)
+            lesion_boxes.run(lesion_boxes.parse_args(options))
+        else:
+            options += ["--split", "val"]
+            for flag, value in [("--labels-csv", args.eyepacs_labels_csv), ("--image-root", args.eyepacs_image_root)]:
+                if value is not None:
+                    options += [flag, value]
+            print("[1/2] Spatial Attention: one ground-truth Class 3 EyePACS validation image", flush=True)
+            spatial.run(spatial.parse_args(options))
     print("[2/2] IDRiD: train+test / train-only comparison with the selected non-BS configuration", flush=True)
     return comparison.run_comparison(
         source, provenance, data_dir=args.data_dir, output_dir=args.output_dir / "idrid_comparison",

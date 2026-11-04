@@ -264,7 +264,8 @@ def crop_box(image):
             min(int(xx.max())+crop.padding+1, image.width), min(int(yy.max())+crop.padding+1, image.height))
 
 
-def save_visuals(output_dir, original, model_input, gate, *, image_id, label, prediction, score, alpha):
+def save_visuals(output_dir, original, model_input, gate, *, image_id, label, prediction, score, alpha,
+                 input_title="EyePACS input"):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -296,7 +297,7 @@ def save_visuals(output_dir, original, model_input, gate, *, image_id, label, pr
     original_overlay.save(output_dir / "overlay_original.png")
     fig, axes = plt.subplots(1, 3, figsize=(10, 3.6), constrained_layout=True)
     axes[0].imshow(view)
-    axes[0].set_title("EyePACS input")
+    axes[0].set_title(input_title)
     plotted = axes[1].imshow(native, cmap=cmap, norm=norm, interpolation="nearest")
     axes[1].set_title(f"Spatial gate ({native.shape[0]} x {native.shape[1]})")
     axes[2].imshow(overlay)
@@ -313,16 +314,9 @@ def save_visuals(output_dir, original, model_input, gate, *, image_id, label, pr
             "interpolation": "bilinear, align_corners=False", "overlay_alpha": alpha}
 
 
-def run(args):
-    path, checkpoint, state, cfg = checkpoint_and_config(args)
-    if not 0 < args.alpha <= 1:
-        raise ValueError("--alpha must be in (0, 1].")
+def infer_image(state, cfg, image_path, device):
+    """Run a saved spatial model on one image using its original input settings."""
     num_classes = int(cfg["model"].get("num_classes", 5))
-    if not 0 <= args.class_id < num_classes:
-        raise ValueError(f"--class-id must be between 0 and {num_classes-1}.")
-    row, image_path, count = select_sample(
-        cfg, split=args.split, class_id=args.class_id, sample_index=args.sample_index, image_id=args.image_id)
-    device = resolve_device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable in this Python environment. Use --device cpu.")
     m = cfg["model"]
@@ -357,6 +351,21 @@ def run(args):
     gate = gate[0, 0]
     prediction = int(ordinal_class_predictions(outputs["prediction"], num_classes).item())
     score = float(outputs["prediction"].item())
+    return original, view, gate, prediction, score
+
+
+def run(args):
+    path, checkpoint, state, cfg = checkpoint_and_config(args)
+    if not 0 < args.alpha <= 1:
+        raise ValueError("--alpha must be in (0, 1].")
+    num_classes = int(cfg["model"].get("num_classes", 5))
+    if not 0 <= args.class_id < num_classes:
+        raise ValueError(f"--class-id must be between 0 and {num_classes-1}.")
+    row, image_path, count = select_sample(
+        cfg, split=args.split, class_id=args.class_id, sample_index=args.sample_index, image_id=args.image_id)
+    device = resolve_device(args.device)
+    original, view, gate, prediction, score = infer_image(state, cfg, image_path, device)
+    size = int(cfg["data"].get("image_size", 384))
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     label, image_id = int(row["_label"]), str(row["_image_id"])

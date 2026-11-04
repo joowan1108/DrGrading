@@ -1,5 +1,7 @@
 # EyePACS Class 3 한 장의 Spatial Attention 맵 추출
 
+병변 마스크를 **빈 사각형**으로 표시해 Attention과 비교하려면 [병변 박스 비교 실행 방법](spatial_lesion_boxes.md)을 사용합니다. 이 모드는 IDRiD Segmentation의 실제 병변 마스크가 있는 영상 또는 직접 지정한 영상·마스크 쌍을 사용합니다.
+
 Spatial Attention 적용 실험의 `best.pt`로 추론을 한 번 수행합니다. 체크포인트에 저장된 모델 구조와 입력 전처리를 사용하며, 기본적으로 같은 분할 설정의 **검증 세트에서 정답이 Class 3인 영상 한 장**을 이미지 ID 순서대로 선택합니다. 예측이 틀려도 선택된 영상을 그대로 출력합니다.
 
 저장소 루트에서 실행합니다.
