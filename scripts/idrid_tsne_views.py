@@ -48,7 +48,7 @@ def save_view(features, targets, predictions, images, output, *, scaling="none",
         raise ValueError("No finite nonzero PCA components remain.")
     effective_perplexity = min(float(perplexity), float(len(selected)-1))
     options = dict(n_components=2, perplexity=effective_perplexity, init="pca" if reduced.shape[1] >= 2 else "random",
-                   learning_rate=learning_rate, early_exaggeration=early_exaggeration, method="exact", random_state=int(seed))
+                   learning_rate=learning_rate, early_exaggeration=early_exaggeration, method="barnes_hut", random_state=int(seed))
     options["max_iter" if "max_iter" in inspect.signature(TSNE).parameters else "n_iter"] = int(max_iter)
     estimator = TSNE(**options)
     xy = estimator.fit_transform(reduced)
@@ -74,6 +74,7 @@ def save_view(features, targets, predictions, images, output, *, scaling="none",
                 "perplexity": effective_perplexity, "pca_components_requested": int(pca_components),
                 "pca_components": reduced.shape[1], "pca_explained_variance_ratio_sum": float(reducer.explained_variance_ratio_.sum()),
                 "max_iter": int(max_iter), "learning_rate": learning_rate, "early_exaggeration": early_exaggeration,
+                "method": "barnes_hut", "angle": float(estimator.angle),
                 "point_size": point_size, "kl_divergence": float(estimator.kl_divergence_),
                 "whitening_null_component_relative_threshold": 1e-8 if scaling == "whiten" else None}
     save_json(output / "tsne_metadata.json", metadata)

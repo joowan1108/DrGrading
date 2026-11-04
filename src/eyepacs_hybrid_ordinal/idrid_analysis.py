@@ -45,7 +45,7 @@ def save_correct_test_tsne(
         "total_test_samples": n, "correct_samples": count, "excluded_incorrect_samples": n - count,
         "test_class_counts": {str(k): int((targets == k).sum()) for k in range(5)},
         "correct_class_counts": {str(k): int((labels == k).sum()) for k in range(5)},
-        "pca_components": None, "perplexity": None,
+        "pca_components": None, "perplexity": None, "method": "barnes_hut",
         "class_colors": {str(k): color for k, color in enumerate(DR_CLASS_COLORS)},
         "image_file": f"{stem}.png", "pdf_file": f"{stem}.pdf",
         "coordinates_file": f"{stem}.csv", "embeddings_file": f"{stem}_embeddings.npz",
@@ -77,7 +77,7 @@ def save_correct_test_tsne(
         perplexity = min(30.0, float(count - 1))
         coordinates = TSNE(
             n_components=2, perplexity=perplexity, learning_rate="auto",
-            init="pca" if components >= 2 else "random", method="exact", random_state=int(seed),
+            init="pca" if components >= 2 else "random", method="barnes_hut", random_state=int(seed),
         ).fit_transform(reduced)
         if not np.isfinite(coordinates).all():
             raise ValueError("t-SNE returned non-finite coordinates.")

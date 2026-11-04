@@ -53,6 +53,7 @@ def test_incorrect_samples_are_removed_before_pca_and_tsne(tmp_path, monkeypatch
     class TSNE:
         def __init__(self, **kwargs):
             assert kwargs["random_state"] == 42 and kwargs["perplexity"] < 5
+            assert kwargs["method"] == "barnes_hut"
         def fit_transform(self, data):
             np.testing.assert_array_equal(data, expected[:, :2])
             calls.append("tsne")

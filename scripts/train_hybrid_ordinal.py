@@ -578,6 +578,7 @@ def save_outer_test_tsne(
         perplexity=perplexity,
         init="pca",
         learning_rate="auto",
+        method="barnes_hut",
         random_state=seed,
     ).fit_transform(reduced)
 
@@ -628,6 +629,7 @@ def save_outer_test_tsne(
         "samples": sample_count,
         "perplexity": perplexity,
         "random_state": seed,
+        "method": "barnes_hut",
         "image_file": image_path.name,
         "coordinates_file": csv_path.name,
         "embedding_metrics_file": embedding_metrics_path.name,

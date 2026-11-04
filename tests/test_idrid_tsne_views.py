@@ -25,7 +25,15 @@ def arrays():
 
 
 @pytest.mark.parametrize("scaling", ["none", "standard", "whiten"])
-def test_scaling_uses_only_selected_features_and_keeps_predictions_and_labels(tmp_path, scaling):
+def test_scaling_uses_only_selected_features_and_keeps_predictions_and_labels(tmp_path, scaling, monkeypatch):
+    from sklearn.manifold import TSNE
+    methods = []
+    class RecordedTSNE(TSNE):
+        def fit_transform(self, features, *args, **kwargs):
+            methods.append(self.method)
+            assert self.method == "barnes_hut"
+            return super().fit_transform(features, *args, **kwargs)
+    monkeypatch.setattr("sklearn.manifold.TSNE", RecordedTSNE)
     features, labels, predictions, images = arrays()
     untouched = features.copy()
     report = save_view(features, labels, predictions, images, tmp_path, scaling=scaling, perplexity=10,
@@ -34,6 +42,7 @@ def test_scaling_uses_only_selected_features_and_keeps_predictions_and_labels(tm
     assert report["selected_samples"] == 19 and report["included_incorrect_samples"] == 1
     assert report["selected_class_counts"]["1"] == 4
     assert report["scaling"] == scaling and report["perplexity"] == 10
+    assert report["method"] == "barnes_hut" and methods == ["barnes_hut"]
     assert report["class_colors"] == {str(k): color for k, color in enumerate(DR_CLASS_COLORS)}
     with np.load(tmp_path / "tsne_input.npz") as saved:
         np.testing.assert_array_equal(saved["selected_embeddings"], features[keep])

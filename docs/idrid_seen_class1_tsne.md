@@ -63,4 +63,15 @@ python scripts/idrid_seen_class1_tsne.py \
 
 `--sweep`는 세 가지 scaling × perplexity 5/10/20/30의 12개 보기를 모두 저장합니다. `sweep/tsne_sweep.png` 또는 `.pdf`가 한눈에 보는 비교표이고, 각 하위 폴더에는 개별 PNG·벡터 PDF·좌표·설정이 있습니다. `tsne_input.npz`에는 선택된 원래 특징과 PCA 이후 특징을 함께 저장합니다. 원래 `evaluation_metrics.json`과 QWK·예측은 수정하지 않습니다.
 
+모든 IDRiD t-SNE와 sweep은 EyePACS와 같은 **`method="barnes_hut"`**을 사용합니다. 이전 IDRiD 코드에서 사용한 `exact`는 제거했습니다. 실제 계산 방식은 각 `tsne_metadata.json`의 `method`에 기록합니다. BS가 학습 중인 경우 별도 터미널에서 다음 명령으로 기존 비-BS 모델의 12가지 변형을 CPU에서 생성합니다.
+
+```bash
+CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 \
+python scripts/idrid_seen_class1_tsne.py \
+  --run-dir checkpoints/hybrid_idrid_all_data_gem_no_spatial_seed42 \
+  --data-dir data/idrid --device cpu \
+  --scaling none --perplexity 30 --max-iter 3000 --sweep \
+  --output-dir "outputs/idrid_tsne_barnes_hut_$(date +%Y%m%d_%H%M%S)"
+```
+
 축만 확대하면 겹치는 점의 관계는 바뀌지 않습니다. t-SNE 설정에 따라 그림이 달라질 수 있고 Class 0·1의 표현이 실제로 유사하면 겹침이 유지될 수 있습니다. 참고: [scikit-learn TSNE](https://scikit-learn.org/stable/modules/generated/sklearn.manifold.TSNE.html), [PCA whitening](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html).
