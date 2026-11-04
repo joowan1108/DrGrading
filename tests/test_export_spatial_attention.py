@@ -226,6 +226,64 @@ def test_listing_checks_weights_and_settings_and_reports_real_inference_commands
     assert len(exporter.main(["--list-runs", "--search-root", str(ready)])) == 1
 
 
+def test_validation_table_only_shows_real_spatial_weights_and_best_validation_accuracy(experiment, monkeypatch, capsys):
+    import export_spatial_attention as exporter
+
+    checkpoint, _, tmp_path = experiment
+    root = tmp_path / "checkpoints"
+    folders = {name: root / name for name in ["best_in_checkpoint", "best_in_json", "missing_validation",
+                                              "misleading_spatial_name", "missing_best"]}
+    for folder in folders.values():
+        folder.mkdir(parents=True)
+    payload = torch.load(checkpoint, weights_only=True)
+    val = {"accuracy": 0.8123, "per_class": {str(k): {"accuracy": rate}
+                                           for k, rate in enumerate([0.91, 0.42, 0.53, 0.64, 0.75])}}
+    payload["val_metrics"] = val
+    torch.save(payload, folders["best_in_checkpoint"] / "best.pt")
+    # Saved checkpoint validation takes priority over a changed/stale sidecar.
+    (folders["best_in_checkpoint"] / "best_metrics.json").write_text(json.dumps(
+        {"epoch": 9, "val": {"accuracy": 0.01}}))
+    del payload["val_metrics"]
+    torch.save(payload, folders["best_in_json"] / "best.pt")
+    (folders["best_in_json"] / "best_metrics.json").write_text(json.dumps(
+        {"epoch": 9, "val": {"accuracy_percent": 70.12, "per_class": {"0": {"accuracy_percent": 88.34}}}}))
+    torch.save(payload, folders["missing_validation"] / "best.pt")
+    (folders["missing_validation"] / "best_metrics.json").write_text(json.dumps(
+        {"epoch": 8, "val": {"accuracy": 0.999}}))
+    (folders["missing_validation"] / "metrics.json").write_text(json.dumps(
+        {"epoch": 99, "best_epoch": 8, "val": val, "best_val": val, "test": val, "train": val}))
+    del payload["model"]["spatial_attention.conv.weight"]
+    torch.save(payload, folders["misleading_spatial_name"] / "best.pt")
+    (folders["missing_best"] / "run_config.json").write_text(json.dumps({"config": payload["config"]}))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Validation summary must read saved values without inference or training.")
+
+    monkeypatch.setattr(exporter, "HybridOrdinalNet", forbidden)
+    records = exporter.main(["--list-runs", "--validation-accuracy", "--search-root", str(root)])
+    assert [Path(row["run_dir"]).name for row in records] == ["best_in_checkpoint", "best_in_json", "missing_validation"]
+    assert records[0]["validation_accuracy_percent"] == pytest.approx(81.23)
+    assert records[0]["validation_class_accuracy_percent"] == pytest.approx(
+        dict(zip(map(str, range(5)), [91, 42, 53, 64, 75])))
+    assert records[1]["validation_accuracy_percent"] == pytest.approx(70.12)
+    assert records[1]["validation_class_accuracy_percent"]["0"] == pytest.approx(88.34)
+    assert records[2]["validation_accuracy_percent"] is None  # Never substitute stale/test/train metrics.
+    text = capsys.readouterr().out
+    assert "81.23" in text and "91.00" in text and "N/A" in text
+    assert "misleading_spatial_name" not in text and "missing_best" not in text
+    assert all(f"C{k} (%)" in text for k in range(5))
+    assert all(value not in text for value in ["READY", "trained_weights=", "--checkpoint", "QWK", "MAE"])
+
+
+def test_best_validation_fallback_never_uses_last_epoch_or_test_metrics():
+    import export_spatial_attention as exporter
+    # Unit conversion must stay explicit: all model accuracy ratios are in [0,1].
+    assert exporter.accuracy_percent({"accuracy": 0.0}) == 0.0
+    assert exporter.accuracy_percent({"accuracy": 1.0}) == 100.0
+    assert exporter.accuracy_percent({"accuracy": 84.5}) is None
+    assert exporter.accuracy_percent({"accuracy": float("nan")}) is None
+
+
 def test_exports_nonconstant_sigmoid_values_without_rescaling_saved_array(experiment, monkeypatch):
     import export_spatial_attention as exporter
 

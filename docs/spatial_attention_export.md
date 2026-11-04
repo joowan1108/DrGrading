@@ -21,6 +21,14 @@ python scripts/export_spatial_attention.py \
 python scripts/export_spatial_attention.py --list-runs
 ```
 
+실제 Spatial Attention 가중치가 있는 `best.pt`만 추려 validation의 전체 정확도와 Class 0–4 정확도만 보려면 다음 명령을 사용합니다.
+
+```bash
+python scripts/export_spatial_attention.py --list-runs --validation-accuracy
+```
+
+전체 정확도 내림차순으로 표시하며 수치는 모두 `%` 단위입니다. `best.pt`의 `val_metrics`를 우선 사용하고, 없으면 같은 epoch의 `best_metrics.json` 또는 `metrics.json`의 `best_val`을 읽습니다. 마지막 epoch의 validation이나 train/test 지표는 대신 사용하지 않습니다. 저장된 값이 없는 칸은 `N/A`로 표시합니다. 재학습이나 영상 추론은 수행하지 않습니다.
+
 다른 위치에 체크포인트가 있으면 `--search-root /실제/경로/checkpoints`를 추가합니다. `BEST MISSING`은 해당 폴더에 `best.pt`가 없음을, `NO SPATIAL WEIGHTS`는 실제 공간 주의 가중치가 없음을 의미합니다. 없는 가중치를 새로 초기화하여 학습된 Attention 맵으로 출력하지 않습니다.
 
 상대 경로의 폴더가 현재 checkout에 없으면 같은 상위 디렉터리의 다른 프로젝트에서 **이름이 정확히 같은** `checkpoints/실험명`을 찾습니다. 예를 들어 `DrGrading-idrid`에서 실행하더라도 옆 `DrGrading/checkpoints/실험명`을 찾을 수 있습니다. 후보가 여러 개면 절대 경로를 지정해야 합니다. 저장된 상대 데이터 경로는 체크포인트가 속한 프로젝트를 기준으로 해석합니다.

@@ -64,7 +64,43 @@ def saved_config(checkpoint, folder):
     return cfg
 
 
-def list_runs(search_root=None):
+def validation_metrics(checkpoint, folder):
+    """Read validation at best.pt, never the final epoch's train/test/val metrics."""
+    if isinstance(checkpoint.get("val_metrics"), dict) and checkpoint["val_metrics"]:
+        return checkpoint["val_metrics"], "best.pt:val_metrics"
+    for filename, key, epoch_key in [("best_metrics.json", "val", "epoch"),
+                                      ("metrics.json", "best_val", "best_epoch")]:
+        path = folder / filename
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text())
+            epoch = checkpoint.get("epoch")
+            if epoch is not None and payload.get(epoch_key) != epoch:
+                continue
+            if isinstance(payload.get(key), dict) and payload[key]:
+                return payload[key], f"{filename}:{key}"
+        except (OSError, ValueError, AttributeError):
+            continue
+    return {}, None
+
+
+def accuracy_percent(metrics):
+    if not isinstance(metrics, dict):
+        return None
+    for key, scale, limit in [("accuracy_percent", 1, 100), ("accuracy", 100, 1)]:
+        value = metrics.get(key)
+        if value is not None and not isinstance(value, bool):
+            try:
+                value = float(value)
+                if np.isfinite(value) and 0 <= value <= limit:
+                    return scale * value
+            except (ValueError, TypeError):
+                pass
+    return None
+
+
+def list_runs(search_root=None, *, validation_accuracy=False):
     """Inspect actual best.pt weights, rather than trusting experiment folder names."""
     if search_root is None:
         roots = {ROOT / "checkpoints"}
@@ -95,6 +131,11 @@ def list_runs(search_root=None):
             flag = cfg.get("model", {}).get("spatial_attention", False) if isinstance(cfg, dict) else None
             record.update(spatial_attention_config=flag, has_trained_spatial_weights=isinstance(weight, torch.Tensor),
                           spatial_weight_shape=list(weight.shape) if isinstance(weight, torch.Tensor) else None)
+            if validation_accuracy and isinstance(weight, torch.Tensor):
+                val, source = validation_metrics(checkpoint, folder)
+                record.update(validation_accuracy_percent=accuracy_percent(val), validation_metrics_source=source,
+                              validation_class_accuracy_percent={str(k): accuracy_percent(val.get("per_class", {}).get(str(k)))
+                                                                 for k in range(5)})
             if not path.is_file():
                 record["status"] = "BEST MISSING"
             elif not isinstance(weight, torch.Tensor):
@@ -113,13 +154,34 @@ def list_runs(search_root=None):
         except (OSError, ValueError, KeyError, RuntimeError, TypeError, pickle.UnpicklingError, EOFError) as error:
             record.update(status="INSPECTION FAILED", error=str(error))
         records.append(record)
+        if validation_accuracy:
+            continue
         print(f"\n{path}\n  {record['status']} | config.spatial_attention="
               f"{record.get('spatial_attention_config')} | trained_weights={record.get('has_trained_spatial_weights')}")
         if "command" in record:
             print(f"  {record['command']}")
         if "error" in record:
             print(f"  {record['error']}")
-    if not records:
+    if validation_accuracy:
+        records = [row for row in records if row.get("has_trained_spatial_weights")]
+        records.sort(key=lambda row: (row.get("validation_accuracy_percent") is None,
+                                     -(row.get("validation_accuracy_percent") or 0), row["run_dir"]))
+        rows = []
+        for record in records:
+            path = Path(record["run_dir"])
+            run_name = str(path.relative_to(ROOT.parent)) if path.is_relative_to(ROOT.parent) else str(path)
+            values = [record.get("validation_accuracy_percent")]
+            values += [record.get("validation_class_accuracy_percent", {}).get(str(k)) for k in range(5)]
+            rows.append([run_name, *[f"{v:.2f}" if v is not None else "N/A" for v in values]])
+        if rows:
+            headings = ["Run", "Acc (%)", *[f"C{k} (%)" for k in range(5)]]
+            widths = [max(len(row[i]) for row in [headings, *rows]) for i in range(7)]
+            for row in [headings, *rows]:
+                print("  ".join(value.ljust(width) if i == 0 else value.rjust(width)
+                                for i, (value, width) in enumerate(zip(row, widths))))
+        else:
+            print("No best.pt checkpoints with Spatial Attention weights found. Use --search-root /actual/project/checkpoints.")
+    elif not records:
         print("No saved runs found. Set --search-root /actual/project/checkpoints to inspect another location.")
     return records
 
@@ -334,6 +396,8 @@ def parse_args(argv=None):
     source.add_argument("--checkpoint", help="Exact path to a Spatial Attention checkpoint.")
     source.add_argument("--list-runs", action="store_true", help="List saved settings and actual spatial weights; no inference or training.")
     parser.add_argument("--search-root", type=Path, help="For --list-runs; default: this and sibling projects' checkpoints/.")
+    parser.add_argument("--validation-accuracy", action="store_true",
+                        help="With --list-runs: show only checkpoints with spatial weights, with validation Acc and C0-C4 (%).")
     parser.add_argument("--config", help="Override/fallback training config; saved checkpoint config is the default.")
     parser.add_argument("--class-id", type=int, default=3, help="Ground-truth class, default: 3.")
     parser.add_argument("--split", choices=["val", "test"], default="val")
@@ -348,12 +412,14 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.search_root is not None and not args.list_runs:
         parser.error("--search-root requires --list-runs.")
+    if args.validation_accuracy and not args.list_runs:
+        parser.error("--validation-accuracy requires --list-runs.")
     return args
 
 
 def main(argv=None):
     args = parse_args(argv)
-    return list_runs(args.search_root) if args.list_runs else run(args)
+    return list_runs(args.search_root, validation_accuracy=args.validation_accuracy) if args.list_runs else run(args)
 
 
 if __name__ == "__main__":
