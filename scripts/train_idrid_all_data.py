@@ -44,7 +44,8 @@ def fit_all(
         class_counts = [int((training["_label"] == grade).sum()) for grade in range(int(cfg["model"]["num_classes"]))]
         component_options["classification_class_counts"] = class_counts
         balanced_metadata = {
-            "enabled": True, "class_counts": class_counts, "counts_source": "actual_training_pool_after_test_copy_exclusion",
+            "enabled": True, "class_counts": class_counts,
+            "counts_source": "actual_training_pool_including_official_test" if official_test_used_for_training else "actual_training_pool_after_test_copy_exclusion",
             "classification_weight": float(cfg["loss"]["classification_weight"]),
             "prediction_source": "round_and_clip_regression_prediction_not_classification_argmax",
             "source": cfg.get("provenance", {}),
@@ -53,7 +54,7 @@ def fit_all(
         save_json(output / "balanced_softmax.json", balanced_metadata)
         print(
             f"Balanced Softmax: weight={cfg['loss']['classification_weight']} | "
-            f"TRAIN-only class counts={class_counts} | final predictions=regression", flush=True,
+            f"{'TRAIN+TEST' if official_test_used_for_training else 'TRAIN-only'} class counts={class_counts} | final predictions=regression", flush=True,
         )
     model, margins, criteria, parameters, optimizer, scaler, amp = hybrid.build_components(cfg, device, **component_options)
     scheduler = hybrid.build_scheduler(optimizer, cfg)
@@ -130,8 +131,9 @@ def fit_all(
             "training_accuracy_is_not_test_accuracy": True,
             "evaluation_status": "pending_training",
         })
+        training_scope = "TRAIN+TEST POOL; FINAL EVALUATION PENDING" if official_test_used_for_training else "TRAIN ONLY; TEST NOT EVALUATED"
         print(
-            f"[TRAIN ONLY; TEST NOT EVALUATED] epoch={epoch} phase={phase} {hybrid.loss_breakdown(metrics, cfg)} "
+            f"[{training_scope}] epoch={epoch} phase={phase} {hybrid.loss_breakdown(metrics, cfg)} "
             f"train_accuracy={metrics['accuracy']:.4f} train_mae={metrics['mae']:.4f}",
             flush=True,
         )

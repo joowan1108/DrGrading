@@ -30,3 +30,22 @@ CPU가 기본값이며 `--device cuda` 또는 `--device auto`도 지원합니다
 - `tsne_metadata.json`: 선택 기준과 클래스별 포함 표본 수
 
 출력 폴더가 이미 사용 중이면 `--output-dir outputs/idrid_8252_class1_all_run02`처럼 새 경로를 지정합니다.
+
+## 저장 특징의 스케일을 바꿔 다시 그리기
+
+기존 분석 폴더의 `test_embeddings.npz`에는 test 전체 특징과 예측이 있습니다. 아래 명령은 영상·체크포인트를 읽거나 추론하지 않고 이 파일만 사용합니다.
+
+```bash
+python scripts/idrid_seen_class1_tsne.py \
+  --embeddings outputs/idrid_8252_class1_all/test_embeddings.npz \
+  --scaling standard --perplexity 10 --max-iter 3000 \
+  --output-dir outputs/idrid_8252_tsne_scaled --sweep
+```
+
+`--scaling`은 `none`(기존 특징), `standard`(각 특징 차원의 평균·분산 표준화), `whiten`(PCA 성분의 분산을 맞추는 whitening)을 지원합니다. Whitening에서는 최대 성분 분산의 1e-8 이하인 성분을 제외해 수치적으로 작은 성분의 확대를 제한합니다. 모든 변환은 Class 1 전체 + 나머지 정답 표본을 먼저 선택한 뒤 라벨을 사용하지 않고 계산합니다. 표준화와 whitening은 원래 거리 구조를 바꾸는 서로 다른 전처리이므로 설정을 그림과 함께 기록합니다.
+
+`--perplexity`, `--learning-rate`, `--early-exaggeration`, `--pca-components`, `--max-iter`, `--point-size`와 seed 42로 재현 가능한 보기를 만들 수 있습니다. scikit-learn의 `n_iter`/`max_iter` 버전 차이를 처리합니다. 요청 perplexity가 표본 수 이상이면 표본 수보다 작게 제한하고 요청값과 실제값을 모두 기록합니다.
+
+`--sweep`는 세 가지 scaling × perplexity 5/10/20/30의 12개 보기를 모두 저장합니다. `sweep/tsne_sweep.png` 또는 `.pdf`가 한눈에 보는 비교표이고, 각 하위 폴더에는 개별 PNG·벡터 PDF·좌표·설정이 있습니다. `tsne_input.npz`에는 선택된 원래 특징과 PCA 이후 특징을 함께 저장합니다. 원래 `evaluation_metrics.json`과 QWK·예측은 수정하지 않습니다.
+
+축만 확대하면 겹치는 점의 관계는 바뀌지 않습니다. t-SNE 설정에 따라 그림이 달라질 수 있고 Class 0·1의 표현이 실제로 유사하면 겹침이 유지될 수 있습니다. 참고: [scikit-learn TSNE](https://scikit-learn.org/stable/modules/generated/sklearn.manifold.TSNE.html), [PCA whitening](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html).
