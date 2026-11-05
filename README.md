@@ -78,6 +78,15 @@ For a fast local test, set `data.max_samples` to a small value in the config.
 Use a value large enough to include at least two samples per class, otherwise
 contrastive positives may be missing for rare classes.
 
+## GAP / GeM Visual Comparison
+
+Use `scripts/compare_gap_gem_maps.py` to compare trained non-Spatial,
+non-Balanced-Softmax GAP and GeM checkpoints on the same original images.
+It exports regression Grad-CAM, gradient × activation, and a separate
+same-feature pooling-moment comparison as compact PDF / 600 dpi PNG figures.
+Existing lesion-box metadata can supply the exact original images and masks.
+See [the commands and output definitions](docs/gap_gem_visualization.md).
+
 ## Paper-Faithful Defaults
 
 - `PCOL` and `SCOLw` follow Eq. (1) and Eq. (2): negative-only denominators,
