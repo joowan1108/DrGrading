@@ -11,22 +11,25 @@
 
 실제 학습 가중치를 엄격하게 불러오고, 두 모델의 전처리·구조·분할·학습 설정을 검사합니다. Spatial Attention 및 Balanced Softmax가 포함된 모델은 이 비교에 사용하지 않습니다. 표의 정확도는 저장된 과거 검증 결과이며, 이 스크립트가 평가 세트 전체에서 새로 계산한 정확도가 아닙니다.
 
-## EyePACS Class 2·3 그림부터 추출
+## EyePACS의 모든 클래스(Class 0–4) 그림 추출
 
-DrGrading-idrid 프로젝트 루트에서 실행합니다.
+DrGrading-idrid 프로젝트 루트에서 실행합니다. 결과 폴더 등 프로젝트 내부의 하위 디렉터리에 있다면 첫 번째 명령으로 루트로 이동합니다.
 
 ~~~bash
+cd "$(git rev-parse --show-toplevel)"
 git pull --ff-only origin learnable_dist
 
 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 \
 python scripts/compare_gap_gem_maps.py \
-  --classes 2 3 --samples-per-class 1 --split val \
+  --classes 0 1 2 3 4 --samples-per-class 1 --split val \
   --device cpu
 ~~~
 
 다른 터미널에서 GPU 학습을 진행 중이면 위 CPU 명령을 사용할 수 있습니다. GPU로 추출할 때는 --device cuda로 변경합니다.
 
-기본적으로 저장된 seed·환자 단위 분할·외부 fold를 재구성하고, 각 정답 클래스에서 영상 ID 순서로 사례를 선택합니다. 두 모델의 예측이나 맵을 보고 성공 사례만 선별하지 않습니다. --sample-index 1로 다음 사례를, --samples-per-class 3으로 클래스마다 세 사례를 추출할 수 있습니다. --classes 1 2 3 4도 가능합니다.
+--classes를 생략해도 기본값은 모든 클래스 0–4입니다. 위 명령은 클래스마다 한 장씩 총 다섯 장을 비교합니다. 저장된 seed·환자 단위 분할·외부 fold를 재구성하고, 각 정답 클래스에서 영상 ID 순서로 사례를 선택합니다. 두 모델의 예측이나 맵을 보고 성공 사례만 선별하지 않습니다. --sample-index 1로 다음 사례를, --samples-per-class 3으로 클래스마다 세 장씩 총 열다섯 장을 추출할 수 있습니다. 특정 클래스만 보려는 경우에만 --classes 2 3처럼 지정합니다.
+
+python: can't open file '.../outputs/.../scripts/compare_gap_gem_maps.py' 오류는 현재 디렉터리가 프로젝트 루트가 아니라 결과 폴더라는 뜻입니다. 위 cd 명령을 먼저 실행하거나, 스크립트의 절대 경로를 지정합니다. 이 오류는 체크포인트 문제가 아니며 새 학습은 필요하지 않습니다.
 
 결과는 outputs/gap_gem_maps_날짜_시각/에 자동 저장합니다. --output-dir을 생략하면 매번 새 폴더를 만들므로 기존 결과와 충돌하지 않습니다.
 
@@ -74,7 +77,7 @@ python scripts/compare_gap_gem_maps.py \
   --gem-checkpoint /실제/경로/384_gem_no_spatial/best.pt \
   --labels-csv /실제/경로/eyepacs/trainLabels.csv \
   --image-root /실제/경로/eyepacs/train \
-  --classes 2 3 --device cuda
+  --classes 0 1 2 3 4 --device cuda
 ~~~
 
 저장된 모델 후보와 검증 정확도만 확인하려면:

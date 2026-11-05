@@ -394,7 +394,8 @@ def parse_args(argv=None):
         parser.add_argument(f"--{role}-config", type=Path)
     parser.add_argument("--labels-csv", type=Path)
     parser.add_argument("--image-root", type=Path)
-    parser.add_argument("--classes", type=int, nargs="+", choices=range(5), default=[2, 3])
+    parser.add_argument("--classes", type=int, nargs="+", choices=range(5), default=list(range(5)),
+                        help="Ground-truth classes to visualize; defaults to all five classes (0-4).")
     parser.add_argument("--split", choices=["val", "test"], default="val")
     parser.add_argument("--sample-index", type=int, default=0)
     parser.add_argument("--samples-per-class", type=int, default=1)
