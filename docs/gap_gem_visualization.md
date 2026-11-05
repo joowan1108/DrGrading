@@ -35,6 +35,31 @@ python: can't open file '.../outputs/.../scripts/compare_gap_gem_maps.py' 오류
 
 EyePACS에는 기본 병변 위치 마스크가 없으므로 이 모드에서는 원본과 두 모델의 맵을 표시하며, 병변 상자·병변 영역 내 비율을 임의로 생성하지 않습니다.
 
+## 기존 결과를 연속형 투명도로 다시 그리기
+
+표시 투명도는 이제 `alpha × 정규화된 기여도`로 연속적으로 변합니다. 0 근처의 작은 양수 값도 갑자기 일정한 투명도로 칠해지던 처리를 제거했습니다. 원래 수치 맵에 추가 평활화나 임계값 처리를 적용하지 않습니다. `--alpha`는 최댓값 위치의 최대 투명도이며 기본값은 0.4입니다.
+
+기존 추출 결과의 `.npz`를 재사용하면 학습과 모델 추론을 다시 하지 않고 그림만 다시 만들 수 있습니다. 원본 영상과 결과 폴더가 있는 원격 환경에서 실행합니다.
+
+~~~bash
+cd "$(git rev-parse --show-toplevel)"
+git pull --ff-only origin learnable_dist
+
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 \
+python scripts/compare_gap_gem_maps.py --replot-latest
+~~~
+
+`outputs/` 아래에서 가장 최근 저장된 `comparison_metadata.json`을 찾고, 그 결과에 포함된 모든 사례를 다시 그립니다. 기존 결과는 유지하며 새 `outputs/gap_gem_maps_continuous_날짜_시각/`에 저장합니다. 원본 `.npz`와 `comparison_metrics.csv`는 내용이 같은 파일로 복사하므로 예측값·기여도 수치·평가 수치는 변하지 않습니다.
+
+특정 결과 폴더를 사용하려면 다음과 같이 지정합니다.
+
+~~~bash
+python scripts/compare_gap_gem_maps.py \
+  --replot-dir outputs/기존_gap_gem_결과폴더
+~~~
+
+이 모드는 원본 결과의 모든 사례를 유지합니다. `--classes`나 `--samples-per-class`로 새 사례를 추출하지 않습니다. 다른 원본 영상 폴더로 이동했다면 `--image-root`를 지정할 수 있으며 실제 픽셀 해시가 같은지 확인합니다. 그림 PNG만으로 수치를 역추정하지 않으므로, `comparison_metadata.json`, `comparison_metrics.csv`, `case_*/gap_maps.npz`, `case_*/gem_maps.npz`가 필요합니다.
+
 ## 앞서 만든 Spatial Attention 그림과 같은 영상·병변 상자 사용
 
 기존 추출 결과의 lesion_box_metadata.json에 원본 영상과 마스크 경로가 들어 있습니다. 합성된 class2_spatial.png 등을 입력하지 않고 이 메타데이터로 **실제 원본 영상과 실제 마스크**를 재사용합니다.
@@ -102,7 +127,7 @@ python scripts/compare_gap_gem_maps.py --list-runs --search-root ../DrGrading/ch
 
 우리 모델은 회귀 모델이므로 **반올림·범위 제한 전의 연속 중증도 출력**을 미분합니다. 양의 기여도는 중증도를 높이는 방향의 민감도를 뜻하며, 특정 클래스의 확률이나 학습된 Spatial Attention 가중치를 뜻하지 않습니다. 표기용 예측 등급만 기존 평가 방식과 동일하게 반올림하고 0–4로 제한합니다.
 
-기여도 맵은 양수 부분을 각 맵의 최댓값으로 나눈 동일한 규칙으로 표시합니다. 따라서 같은 색의 절대 기울기가 모델 사이에서 같다는 뜻은 아닙니다. 양의 기여도가 전혀 없으면 원본 영상으로 표시하고 수치에 그 상태를 기록합니다.
+기여도 맵은 양수 부분을 각 맵의 최댓값으로 나눈 동일한 규칙으로 표시하고, 그 값에 비례하는 연속형 투명도를 적용합니다. 따라서 같은 색의 절대 기울기가 모델 사이에서 같다는 뜻은 아닙니다. 양의 기여도가 전혀 없으면 원본 영상으로 표시하고 수치에 그 상태를 기록합니다.
 
 병변 면적 보정 비율은 다음과 같습니다.
 

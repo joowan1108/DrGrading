@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import pickle
 import re
+import shutil
 import sys
 
 import numpy as np
@@ -227,6 +228,8 @@ def infer_cases(cases, cfg, state, role, device):
 
 
 def overlay(original, values, crop, alpha, cmap, vmax):
+    if not np.isfinite(vmax) or vmax <= 0 or not 0 <= alpha <= 1:
+        raise ValueError("Require finite vmax > 0 and alpha in [0,1].")
     display = original.copy()
     display.thumbnail((1600, 1600))
     sx, sy = display.width/original.width, display.height/original.height
@@ -234,11 +237,14 @@ def overlay(original, values, crop, alpha, cmap, vmax):
     box = (round(x0*sx), round(y0*sy), round(x1*sx), round(y1*sy))
     w, h = box[2]-box[0], box[3]-box[1]
     heat = resize_map(values, h, w)
-    rgb = (cmap(np.clip(heat/vmax, 0, 1))[..., :3] * 255).astype(np.uint8)
+    unit = np.clip(heat/vmax, 0, 1)
+    rgb = np.asarray(cmap(unit)[..., :3], dtype=np.float32) * 255
     region = display.crop(box)
-    # A zero attribution is displayed as the original, rather than painted as evidence.
-    blended = Image.blend(region, Image.fromarray(rgb), alpha)
-    display.paste(Image.composite(blended, region, Image.fromarray((heat > 0).astype(np.uint8)*255)), box[:2])
+    # Opacity tends continuously to zero with attribution; there is no binary mask.
+    opacity = (float(alpha) * unit)[..., None]
+    background = np.asarray(region, dtype=np.float32)
+    blended = np.rint(background*(1-opacity) + rgb*opacity).clip(0, 255).astype(np.uint8)
+    display.paste(Image.fromarray(blended), box[:2])
     return display
 
 
@@ -300,9 +306,9 @@ def render_comparison(cases, output, kind, args, exploratory=False):
                      "pooling_moments": "Pooling moments | one fixed GeM feature map"}[kind]
             if exploratory:
                 title += " | settings differ"
-            note = ("Channel-normalized powered sums; both maps use the same nonnegative GeM features."
+            note = ("Channel-normalized powered sums; same GeM features. Opacity scales with value."
                     if kind == "pooling_moments" else
-                    "Target: raw severity; positive evidence for higher severity. Maps normalized individually.")
+                    "Positive: higher severity. Each map normalized by its maximum; opacity follows value.")
             fig.suptitle(title + "\n" + note, fontsize=8)
             image_path = output / f"{stem}_page{page:02d}.png"
             fig.savefig(image_path, dpi=600, bbox_inches="tight", facecolor="white")
@@ -332,9 +338,102 @@ def list_runs(search_root=None):
     return records
 
 
+def resolve_replot_metadata(args):
+    if args.replot_dir:
+        path = args.replot_dir.expanduser().resolve()
+        path = path / "comparison_metadata.json" if path.is_dir() else path
+    else:
+        candidates = []
+        for candidate in (ROOT / "outputs").rglob("comparison_metadata.json"):
+            try:
+                payload = json.loads(candidate.read_text())
+                if isinstance(payload.get("cases"), list) and payload["cases"]:
+                    candidates.append(candidate)
+            except (OSError, ValueError, AttributeError):
+                continue
+        if not candidates:
+            raise FileNotFoundError("No saved comparison_metadata.json under outputs/. "
+                                    "Use --replot-dir with the original complete export folder, containing case_*/gap_maps.npz and gem_maps.npz.")
+        path = max(candidates, key=lambda p: (p.stat().st_mtime_ns, str(p)))
+    if not path.is_file():
+        raise FileNotFoundError(f"Saved comparison metadata not found: {path}")
+    return path
+
+
+def replot(args):
+    """Redraw cached scalar fields without loading checkpoints or running inference."""
+    metadata_path = resolve_replot_metadata(args)
+    report = json.loads(metadata_path.read_text())
+    if not isinstance(report.get("cases"), list) or not report["cases"]:
+        raise ValueError(f"No saved cases in {metadata_path}")
+    source_dir = metadata_path.parent
+    print(f"Replot saved maps: {source_dir}", flush=True)
+    case_inputs = []
+    for case in report["cases"]:
+        old_directory = Path(case["directory"])
+        local = source_dir / old_directory.name
+        cache = local if local.is_dir() else old_directory
+        image_path = Path(case["image_path"]).expanduser()
+        if args.image_root:
+            image_path = spatial.resolve_image_path(args.image_root.expanduser(), case["image_id"])
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Original image not found: {image_path}. "
+                                    "Render on the computer holding the original images, or set --image-root.")
+        if case.get("image_pixel_sha256") and pixel_digest(image_path) != case["image_pixel_sha256"]:
+            raise ValueError(f"Original image pixels have changed: {image_path}")
+        maps = {}
+        for role in ["gap", "gem"]:
+            path = cache / f"{role}_maps.npz"
+            if not path.is_file():
+                raise FileNotFoundError(f"Cached map not found: {path}. Supply the complete original export folder; PNG files alone are insufficient.")
+            required = ["gradcam", "gradient_activation"] + (["moment_gap", "moment_gem"] if role == "gem" else [])
+            with np.load(path, allow_pickle=False) as archive:
+                for name in required:
+                    if name not in archive or archive[name].ndim != 2 or not np.isfinite(archive[name]).all():
+                        raise ValueError(f"Missing or invalid native map {name!r} in {path}")
+            maps[role] = path
+        case_inputs.append((case, image_path.resolve(), cache.name, maps))
+    metrics = source_dir / "comparison_metrics.csv"
+    if not metrics.is_file():
+        raise FileNotFoundError(f"Original numerical results not found: {metrics}")
+    output = (args.output_dir or ROOT / "outputs" / f"gap_gem_maps_continuous_{datetime.now():%Y%m%d_%H%M%S_%f}").expanduser().resolve()
+    if output.exists():
+        raise FileExistsError(f"Choose a new --output-dir, or omit it for an automatically dated folder: {output}")
+    output.mkdir(parents=True)
+    cases = []
+    for old, image_path, directory_name, maps in case_inputs:
+        case = copy.deepcopy(old)
+        directory = output / directory_name
+        directory.mkdir()
+        case.update(directory=str(directory), image_path=str(image_path))
+        case["native_map_sha256"] = {}
+        for role, source in maps.items():
+            target = directory / f"{role}_maps.npz"
+            shutil.copy2(source, target)
+            case["native_map_sha256"][role] = digest(source)
+        save_json(directory / "metadata.json", case)
+        cases.append(case)
+    methods = ["gradcam", "gradient_activation"] if args.method == "both" else [args.method]
+    files = []
+    for name in [*methods, "pooling_moments"]:
+        files += render_comparison(cases, output, name, args,
+                                   exploratory=not report.get("controlled_pooling_comparison", True))
+    shutil.copy2(metrics, output / metrics.name)
+    report.update(output_dir=str(output), cases=cases, device="CPU; cached rendering only",
+                  rendering={"mode": "continuous_alpha", "opacity": "alpha * clipped normalized map", "maximum_alpha": args.alpha},
+                  replot_source_metadata=str(metadata_path), replot_source_sha256=digest(metadata_path),
+                  native_maps_unchanged=True, training_performed=False, inference_performed=False,
+                  outputs=files + [str(output / metrics.name)])
+    save_json(output / "comparison_metadata.json", report)
+    print(f"Saved continuous-opacity comparison: {output}", flush=True)
+    return report
+
+
 def run(args):
     if args.list_runs:
         return list_runs(args.search_root)
+    if args.replot_dir or args.replot_latest:
+        return replot(args)
     cfgs, states, sources = {}, {}, {}
     for role in ["gap", "gem"]:
         path = resolve_checkpoint(getattr(args, role + "_checkpoint") or getattr(args, role + "_run"))
@@ -379,7 +478,9 @@ def run(args):
               "moment_definition": "mean_c(x[c,u]^p / sum_v x[c,v]^p), on the same clamped GeM feature map for both p values",
               "lesion_metrics_domain": "original mask pixels inside the inference crop; padded boxes are display-only",
               "interpretation": "Regression maps are sensitivities, not learned spatial gates; pooling moments are not prediction attributions.",
-              "training_performed": False, "outputs": files + [str(output / "comparison_metrics.csv")]}
+              "rendering": {"mode": "continuous_alpha", "opacity": "alpha * clipped normalized map", "maximum_alpha": args.alpha},
+              "training_performed": False, "inference_performed": True,
+              "outputs": files + [str(output / "comparison_metrics.csv")]}
     save_json(output / "comparison_metadata.json", report)
     print(f"Saved GAP/GeM comparison: {output}", flush=True)
     return report
@@ -402,10 +503,13 @@ def parse_args(argv=None):
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--image", type=Path, help="Explicit original image, without requiring EyePACS CSVs.")
     source.add_argument("--case-metadata", type=Path, nargs="+", help="Reuse exact images/masks from existing lesion_box_metadata.json files.")
+    source.add_argument("--replot-dir", type=Path, help="Redraw all cached cases in a saved export folder, without model inference.")
+    source.add_argument("--replot-latest", action="store_true", help="Find the latest saved comparison under outputs/ and redraw cached maps.")
     parser.add_argument("--mask", action="append", type=Path, help="True lesion mask for --image; repeat for multiple lesion types.")
     parser.add_argument("--true-class", type=int, choices=range(5))
     parser.add_argument("--box-padding", type=int, default=6)
-    parser.add_argument("--alpha", type=float, default=0.4)
+    parser.add_argument("--alpha", type=float, default=0.4,
+                        help="Maximum overlay opacity; actual opacity scales continuously with normalized map value.")
     parser.add_argument("--method", choices=["both", "gradcam", "gradient_activation"], default="both")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--output-dir", type=Path, help="New output folder; omitted creates a unique dated folder.")

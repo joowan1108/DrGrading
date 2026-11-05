@@ -89,6 +89,33 @@ def test_stable_moments_and_crop_mask_metrics():
     assert lesion_map_metrics(np.ones((2, 2)), None, (0, 0, 2, 2))["lesion_mass_fraction"] is None
 
 
+def test_overlay_opacity_is_continuous_at_zero_and_preserves_data():
+    original = Image.new("RGB", (5, 1), (100, 100, 100))
+    values = np.array([[0, 1e-7, .25, .5, 1]], dtype=np.float32)
+    before = values.copy()
+    def red_map(unit):
+        rgba = np.zeros((*unit.shape, 4), np.float32)
+        rgba[..., 0] = 200/255
+        rgba[..., 3] = 1
+        return rgba
+    result = compare.overlay(original, values, (0, 0, 5, 1), .4, red_map, 1.)
+    np.testing.assert_array_equal(np.asarray(result)[0],
+                                  [[100, 100, 100], [100, 100, 100], [110, 90, 90], [120, 80, 80], [140, 60, 60]])
+    np.testing.assert_array_equal(values, before)
+    np.testing.assert_array_equal(np.asarray(original), np.full((1, 5, 3), 100, np.uint8))
+
+
+def test_continuous_overlay_does_not_change_pixels_outside_inference_crop():
+    original = Image.new("RGB", (8, 6), (80, 90, 100))
+    def white_map(unit):
+        return np.ones((*unit.shape, 4), np.float32)
+    result = np.asarray(compare.overlay(original, np.ones((2, 2)), (2, 1, 6, 5), .5, white_map, 1.))
+    outside = np.ones((6, 8), bool)
+    outside[1:5, 2:6] = False
+    np.testing.assert_array_equal(result[outside], np.asarray(original)[outside])
+    assert (result[1:5, 2:6] > np.asarray(original)[1:5, 2:6]).all()
+
+
 @pytest.fixture
 def pair(tmp_path):
     torch.set_num_threads(1)
@@ -160,6 +187,23 @@ def test_real_model_export_with_boxes_predictions_and_provenance(pair, tmp_path,
     with pytest.raises(FileExistsError, match="automatically dated"):
         compare.run(compare.parse_args(["--gap-checkpoint", str(paths["gap"]), "--gem-checkpoint", str(paths["gem"]),
                                         "--image", str(image), "--output-dir", str(out)]))
+    # Re-rendering must work without any checkpoint access, training, or inference.
+    def no_weights(*args, **kwargs):
+        pytest.fail("Cached replot must not load model weights or run inference.")
+    monkeypatch.setattr(compare, "read_checkpoint", no_weights)
+    monkeypatch.setattr(compare, "infer_cases", no_weights)
+    next_out = tmp_path / "continuous_replot"
+    source_before = digest(out / "comparison_metadata.json")
+    replotted = compare.run(compare.parse_args(["--replot-dir", str(out), "--output-dir", str(next_out)]))
+    assert replotted["rendering"]["mode"] == "continuous_alpha"
+    assert replotted["native_maps_unchanged"] and not replotted["inference_performed"]
+    assert replotted["cases"][0]["models"] == case["models"]
+    for role in ["gap", "gem"]:
+        old_map = Path(case["directory"]) / f"{role}_maps.npz"
+        new_map = Path(replotted["cases"][0]["directory"]) / f"{role}_maps.npz"
+        assert old_map.read_bytes() == new_map.read_bytes()
+    assert (out / "comparison_metrics.csv").read_bytes() == (next_out / "comparison_metrics.csv").read_bytes()
+    assert digest(out / "comparison_metadata.json") == source_before
 
 
 @pytest.mark.parametrize("change, message", [
@@ -244,3 +288,27 @@ def test_exact_sibling_run_resolution_never_substitutes_another_checkpoint(tmp_p
     (other / "best.pt").write_bytes(b"another path fixture")
     with pytest.raises(FileNotFoundError, match="found 2"):
         compare.resolve_checkpoint(Path("checkpoints") / compare.GAP_RUN)
+
+
+def test_latest_replot_source_uses_complete_metadata_and_rejects_missing_raw_maps(tmp_path, pair, monkeypatch):
+    import os
+    monkeypatch.setattr(compare, "ROOT", tmp_path)
+    for name, stamp in [("older", 10), ("newer", 20)]:
+        folder = tmp_path / "outputs" / name
+        folder.mkdir(parents=True)
+        metadata = folder / "comparison_metadata.json"
+        metadata.write_text(json.dumps({"cases": [{"placeholder": True}]}))
+        os.utime(metadata, (stamp, stamp))
+    assert compare.resolve_replot_metadata(compare.parse_args(["--replot-latest"])).parent.name == "newer"
+    broken = tmp_path / "outputs/broken"
+    broken.mkdir()
+    (broken / "comparison_metadata.json").write_text("incomplete JSON")
+    assert compare.resolve_replot_metadata(compare.parse_args(["--replot-latest"])).parent.name == "newer"
+    _, _, image, _ = pair
+    source = tmp_path / "outputs/newer"
+    (source / "comparison_metadata.json").write_text(json.dumps({"cases": [
+        {"directory": str(source / "case_01_original"), "image_path": str(image)}]}))
+    output = tmp_path / "must_not_be_created"
+    with pytest.raises(FileNotFoundError, match="PNG files alone are insufficient"):
+        compare.run(compare.parse_args(["--replot-dir", str(source), "--output-dir", str(output)]))
+    assert not output.exists()
