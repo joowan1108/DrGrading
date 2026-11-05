@@ -42,11 +42,24 @@ def source_config(source_run):
     return cfg, values, origin
 
 
-def configure(source_run, data_dir, output_dir, *, classification_weight=0.1, device="auto", num_workers=None):
+def configure(source_run, data_dir, output_dir, *, classification_weight=0.1, device="auto", num_workers=None,
+              epochs=None, test_every_epochs=None, test_every_steps=None):
     if not math.isfinite(classification_weight) or classification_weight < 0:
         raise ValueError("classification-weight must be finite and nonnegative.")
     cfg, initial_values, origin = source_config(source_run)
     source = copy.deepcopy(cfg)
+    if test_every_epochs is not None and test_every_steps is not None:
+        raise ValueError("Choose --test-every-epochs or --test-every-steps.")
+    for value in (epochs, test_every_epochs, test_every_steps):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
+            raise ValueError("Epoch budget and evaluation interval must be positive integers.")
+    if epochs is not None:
+        cfg["train"]["epochs"] = epochs
+    if int(cfg["train"]["epochs"]) <= int(cfg["loss"]["margin_phase1_max_epochs"]):
+        raise ValueError("Total epochs must exceed margin_phase1_max_epochs so Phase 2 can run.")
+    for key, value in [("test_every_epochs", test_every_epochs), ("test_every_steps", test_every_steps)]:
+        if value is not None:
+            cfg["train"][key] = value
     cfg["device"] = device
     cfg["data"]["data_dir"] = str(Path(data_dir).resolve())
     if num_workers is not None:
@@ -61,15 +74,19 @@ def configure(source_run, data_dir, output_dir, *, classification_weight=0.1, de
     cfg["train"]["output_dir"] = str(Path(output_dir).resolve())
     cfg["provenance"] = {"source_run": str(Path(source_run).resolve()), "source_weights_loaded": False,
                          "source_initial_margins": origin, "added_balanced_softmax_weight": classification_weight,
-                         "matched_settings": "source architecture, data augmentation, seed, alpha/beta, RMSE/MMNP, optimizer, scheduler, epoch budget, phase boundaries and initial gaps",
+                         "matched_settings": "source architecture, data augmentation, seed, alpha/beta, RMSE/MMNP, optimizer, scheduler, phase boundaries and initial gaps",
+                         "epoch_budget": {"source": int(source["train"]["epochs"]), "effective": int(cfg["train"]["epochs"]),
+                                          "changed": int(source["train"]["epochs"]) != int(cfg["train"]["epochs"])},
                          "prediction_source": "round_and_clip_regression; BS head is auxiliary"}
     return cfg, source
 
 
 def run(source_run, data_dir, output_dir, *, classification_weight=0.1, device="auto", num_workers=None,
-        tsne_options=None, sweep=False, allow_synthetic=False):
+        tsne_options=None, sweep=False, allow_synthetic=False, epochs=None,
+        test_every_epochs=None, test_every_steps=None):
     cfg, original = configure(source_run, data_dir, output_dir, classification_weight=classification_weight,
-                              device=device, num_workers=num_workers)
+                              device=device, num_workers=num_workers, epochs=epochs,
+                              test_every_epochs=test_every_epochs, test_every_steps=test_every_steps)
     print(f"BS comparison: input={cfg['data']['image_size']} epochs={cfg['train']['epochs']} "
           f"alpha/beta={cfg['loss']['alpha']}/{cfg['loss']['beta']} margin_lr={cfg['loss']['margin_lr']} "
           f"MMNP={cfg['loss']['mmnp_pair_reduction']} | official train+test", flush=True)
@@ -89,6 +106,10 @@ def parse_args(argv=None):
     parser.add_argument("--classification-weight", type=float, default=0.1)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--num-workers", type=int)
+    parser.add_argument("--epochs", type=int, help="Override the source training budget; must exceed the Phase 1 maximum.")
+    period = parser.add_mutually_exclusive_group()
+    period.add_argument("--test-every-epochs", type=int, help="Report training-seen test metrics every N epochs.")
+    period.add_argument("--test-every-steps", type=int, help="Report training-seen test metrics every N mini-batch iterations.")
     parser.add_argument("--scaling", choices=["none", "standard", "whiten"], default="none")
     parser.add_argument("--perplexity", type=float, default=30)
     parser.add_argument("--max-iter", type=int, default=1000)
@@ -100,6 +121,7 @@ def main(argv=None):
     args = parse_args(argv)
     return run(args.source_run, args.data_dir, args.output_dir, classification_weight=args.classification_weight,
                device=args.device, num_workers=args.num_workers,
+               epochs=args.epochs, test_every_epochs=args.test_every_epochs, test_every_steps=args.test_every_steps,
                tsne_options={"scaling": args.scaling, "perplexity": args.perplexity, "max_iter": args.max_iter},
                sweep=args.tsne_sweep)
 

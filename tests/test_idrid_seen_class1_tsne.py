@@ -114,3 +114,24 @@ def test_cli_help_formats_and_defaults_point_to_the_existing_8252_model(capsys):
     args = analysis.parse_args([])
     assert args.run_dir == ROOT / "checkpoints/hybrid_idrid_all_data_gem_no_spatial_seed42"
     assert args.device == "cpu"
+
+
+def test_existing_phase1_checkpoint_reports_its_actual_epoch_without_retraining(tmp_path, monkeypatch):
+    predictions = np.repeat(np.arange(5), 2)
+    run, data, _ = setup_run(tmp_path, predictions)
+    payload = torch.load(run / "final.pt", weights_only=True)
+    payload["epoch"] = 100
+    torch.save(payload, run / "phase1_last.pt")
+    final_before = (run / "final.pt").read_bytes()
+    monkeypatch.setattr(analysis, "build_evaluation_model", lambda cfg, device: Tiny(predictions))
+    def forbidden(*args, **kwargs):
+        pytest.fail("Existing Phase 1 evaluation must not train.")
+    monkeypatch.setattr(analysis.hybrid, "train_one_epoch", forbidden)
+    output = tmp_path / "phase1_analysis"
+    analysis.analyze(run, data, output, allow_synthetic=True, checkpoint_name="phase1_last.pt",
+                     tsne_options={"max_iter": 300})
+    report = json.loads((output / "evaluation_metrics.json").read_text())
+    assert report["checkpoint_epoch"] == 100
+    assert report["checkpoint"] == str(run / "phase1_last.pt")
+    assert report["training_performed"] is False and report["evaluation_is_independent"] is False
+    assert (run / "final.pt").read_bytes() == final_before

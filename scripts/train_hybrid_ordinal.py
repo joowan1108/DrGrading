@@ -378,6 +378,7 @@ def train_one_epoch(
     cfg,
     epoch: int,
     phase: str | None = None,
+    step_callback=None,
 ):
     model.train()
     meter_names = [
@@ -401,7 +402,7 @@ def train_one_epoch(
     shared_batch = regression_loader is contrastive_loader
     regression_iter = None if shared_batch else iter(regression_loader)
 
-    for contrastive_images, contrastive_targets, _ in progress:
+    for batch_index, (contrastive_images, contrastive_targets, _) in enumerate(progress, 1):
         contrastive_sample_weights = torch.from_numpy(
             batch_inverse_frequency_sample_weights(
                 contrastive_targets.numpy(),
@@ -479,6 +480,8 @@ def train_one_epoch(
         )
         epoch_targets.extend(regression_targets.detach().cpu().long().tolist())
         progress.set_postfix(loss=f"{meters['total'].avg:.4f}", acc=f"{meters['accuracy'].avg:.3f}")
+        if step_callback is not None:
+            step_callback(batch_index)
 
     metrics = {name: meter.avg for name, meter in meters.items()}
     epoch_metrics = aggregate_predictions(

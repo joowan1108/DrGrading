@@ -20,7 +20,8 @@ from eyepacs_hybrid_ordinal.utils import resolve_device, save_json
 from idrid_tsne_views import save_view, save_sweep
 
 
-def analyze(run, data, out, *, device="cpu", allow_synthetic=False, tsne_options=None, sweep=False):
+def analyze(run, data, out, *, device="cpu", allow_synthetic=False, tsne_options=None, sweep=False,
+            checkpoint_name="final.pt"):
 
     run, data, out = [Path(p).expanduser().resolve() for p in [run, data, out]]
     if out.exists() and any(out.iterdir()):
@@ -28,7 +29,10 @@ def analyze(run, data, out, *, device="cpu", allow_synthetic=False, tsne_options
     reference = json.loads((run / "evaluation_metrics.json").read_text())
     if reference.get("official_test_used_for_training") is not True:
         raise ValueError("Expected the original train+test model evaluation.")
-    checkpoint = torch.load(run / "final.pt", map_location="cpu", weights_only=True)
+    if checkpoint_name not in {"final.pt", "phase1_last.pt"}:
+        raise ValueError("Choose final.pt or the existing phase1_last.pt from this run.")
+    checkpoint_path = run / checkpoint_name
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     if checkpoint.get("official_test_used_for_training") is False:
         raise ValueError("Checkpoint records train-only training; choose the actual train+test run.")
     cfg = copy.deepcopy(checkpoint["config"])
@@ -67,7 +71,7 @@ def analyze(run, data, out, *, device="cpu", allow_synthetic=False, tsne_options
                           "prediction_continuous": scores, "prediction_class": pred, "correct": pred == truth})
     keep = (truth == 1) | (pred == truth)
     out.mkdir(parents=True, exist_ok=True)
-    save_json(out / "evaluation_metrics.json", {"test": metrics, "official_test_used_for_training": True, "evaluation_is_independent": False, "metrics_source": "fresh checkpoint inference on all official test samples", "checkpoint": str(run / "final.pt"), "checkpoint_sha256": digest(run / "final.pt"), "checkpoint_epoch": checkpoint.get("epoch"), "reference_accuracy_percent": 100*old["accuracy"], "accuracy_difference_pp": metrics["accuracy_percent"]-100*old["accuracy"], "device": str(device), "amp": False, "training_performed": False, "synthetic_smoke_test": allow_synthetic})
+    save_json(out / "evaluation_metrics.json", {"test": metrics, "official_test_used_for_training": True, "evaluation_is_independent": False, "metrics_source": "fresh checkpoint inference on all official test samples", "checkpoint": str(checkpoint_path), "checkpoint_sha256": digest(checkpoint_path), "checkpoint_epoch": checkpoint.get("epoch"), "reference_accuracy_percent": 100*old["accuracy"], "reference_checkpoint": "original final evaluation", "accuracy_difference_pp": metrics["accuracy_percent"]-100*old["accuracy"], "device": str(device), "amp": False, "training_performed": False, "synthetic_smoke_test": allow_synthetic})
     hybrid.report_per_class(metrics, out, split_label="training-seen test")
     saved.to_csv(out / "test_predictions.csv", index=False)
     np.savez_compressed(out / "test_embeddings.npz", embeddings=features, labels=truth, predictions=pred, images=np.asarray(images), selected=keep)
@@ -78,6 +82,7 @@ def analyze(run, data, out, *, device="cpu", allow_synthetic=False, tsne_options
         save_sweep(features, truth, pred, images, out / "sweep", context=context, **(tsne_options or {}))
     print(f"Accuracy={metrics['accuracy_percent']:.2f}% QWK={metrics['quadratic_weighted_kappa']:.4f} MAE={metrics['mae']:.4f}")
     print(f"Original saved accuracy={100*old['accuracy']:.2f}%; difference={metrics['accuracy_percent']-100*old['accuracy']:+.4f} percentage points")
+    print(f"Evaluated checkpoint={checkpoint_path} | actual epoch={checkpoint.get('epoch')}")
     print(f"t-SNE counts={counts}; total={int(keep.sum())}; included mistakes={metadata['included_incorrect_samples']}")
     print(f"Saved: {out}")
     return metrics, counts
@@ -104,6 +109,7 @@ def replot(archive, output, options=None, sweep=False):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Analyze the saved train+test IDRiD model; include all C1 and correct predictions of other classes in t-SNE.")
     parser.add_argument("--run-dir", type=Path, default=ROOT / "checkpoints/hybrid_idrid_all_data_gem_no_spatial_seed42")
+    parser.add_argument("--checkpoint-name", choices=["final.pt", "phase1_last.pt"], default="final.pt")
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data/idrid")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs/idrid_8252_class1_all")
     parser.add_argument("--device", choices=["cpu", "cuda", "auto"], default="cpu")
@@ -126,7 +132,8 @@ def main(argv=None):
                    early_exaggeration=args.early_exaggeration, point_size=args.point_size)
     if args.embeddings is not None:
         return replot(args.embeddings, args.output_dir, options, args.sweep)
-    return analyze(args.run_dir, args.data_dir, args.output_dir, device=args.device, tsne_options=options, sweep=args.sweep)
+    return analyze(args.run_dir, args.data_dir, args.output_dir, device=args.device, tsne_options=options,
+                   sweep=args.sweep, checkpoint_name=args.checkpoint_name)
 
 
 if __name__ == "__main__":

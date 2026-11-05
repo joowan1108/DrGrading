@@ -11,6 +11,7 @@ import csv
 import json
 import math
 import platform
+import random
 import subprocess
 from pathlib import Path
 
@@ -31,12 +32,21 @@ NOTICE = (
 
 def fit_all(
     training, manifest, cfg, output, device, *, protocol=PROTOCOL, official_test_used_for_training=True,
+    periodic_test_frame=None,
 ):
     """Train the supplied pool without validation; record its actual split protocol."""
     run_metadata = {
         "protocol": protocol, "official_test_used_for_training": official_test_used_for_training,
         "evaluation_is_independent": not official_test_used_for_training,
     }
+    every_epochs, every_steps = (cfg["train"].get(key) for key in ("test_every_epochs", "test_every_steps"))
+    for value in (every_epochs, every_steps):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
+            raise ValueError("test-every-epochs/test-every-steps must be positive integers.")
+    if every_epochs and every_steps:
+        raise ValueError("Choose epoch-based or batch-iteration-based periodic evaluation.")
+    if (every_epochs or every_steps) and (not official_test_used_for_training or periodic_test_frame is None):
+        raise ValueError("Periodic evaluation here requires the explicitly training-seen official test frame.")
     set_seed(int(cfg["seed"]))
     loader = hybrid.make_loader(training, manifest, cfg, training=True)
     component_options = {}
@@ -75,6 +85,38 @@ def fit_all(
     phase = "phase1_joint" if margins is not None else "fixed"
     previous, stable_epochs, freeze_reason = None, 0, None
     history = []
+    periodic = []
+
+    def periodic_evaluate(epoch, iteration):
+        destination = output / "periodic_test" / f"step_{iteration:08d}"
+        destination.mkdir(parents=True, exist_ok=True)
+        was_training, python_rng, numpy_rng = model.training, random.getstate(), np.random.get_state()
+        cuda_devices = [device.index if device.index is not None else torch.cuda.current_device()] if device.type == "cuda" else []
+        # Evaluation must not alter dropout/augmentation RNG or leave BatchNorm in eval mode.
+        with torch.random.fork_rng(devices=cuda_devices):
+            try:
+                result = evaluate_seen_test(model, periodic_test_frame, manifest, cfg, destination, device, amp,
+                                             checkpoint_name=None, epoch=epoch, iteration=iteration, periodic=True)
+            finally:
+                model.train(was_training)
+                random.setstate(python_rng)
+                np.random.set_state(numpy_rng)
+        metrics = result["seen_test"]
+        row = {"epoch": epoch, "batch_iteration": iteration, "official_test_used_for_training": True,
+               "evaluation_is_independent": False, "accuracy_percent": metrics["accuracy_percent"],
+               "macro_accuracy_percent": 100*metrics["macro_accuracy"], "qwk": metrics["quadratic_weighted_kappa"],
+               "mae": metrics["mae"]}
+        row.update({f"C{k}_accuracy_percent": metrics["per_class"][str(k)]["accuracy_percent"] for k in range(5)})
+        periodic.append(row)
+        save_json(output / "periodic_test_metrics.json", {
+            "evaluation_scope": "training_seen_test", "official_test_used_for_training": True,
+            "evaluation_is_independent": False, "test_every_epochs": every_epochs,
+            "test_every_steps": every_steps, "used_for_scheduler_or_checkpoint_selection": False,
+            "evaluations": periodic,
+        })
+        with (output / "periodic_test_metrics.csv").open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(row)); writer.writeheader(); writer.writerows(periodic)
+
     for epoch in range(1, int(cfg["train"]["epochs"]) + 1):
         phase_label = {
             "phase1_joint": "Phase 1: joint", "phase2_frozen": "Phase 2: frozen", "fixed": "Fixed margins",
@@ -86,13 +128,22 @@ def fit_all(
             f"margins={'trainable' if phase == 'phase1_joint' else 'fixed'} | NO validation",
             flush=True,
         )
+        callback_options = {}
+        if every_steps:
+            def after_batch(batch_index):
+                iteration = (epoch-1)*len(loader) + batch_index
+                if iteration % every_steps == 0:
+                    periodic_evaluate(epoch, iteration)
+            callback_options["step_callback"] = after_batch
         metrics = hybrid.train_one_epoch(
             model, loader, loader, optimizer, scaler, device, amp,
-            criteria, margins, parameters, cfg, epoch, phase=phase_label,
+            criteria, margins, parameters, cfg, epoch, phase=phase_label, **callback_options,
         )
         if not all(math.isfinite(float(metrics[name])) for name in ("total", "pcol", "scol", "mmnp", "rmse")):
             raise FloatingPointError("Non-finite training losses; stopping without evaluation.")
         scheduler.step(float(metrics["rmse"]))
+        if every_epochs and epoch % every_epochs == 0:
+            periodic_evaluate(epoch, epoch*len(loader))
         change = 0.0 if phase == "phase2_frozen" else None
         if phase == "phase1_joint":
             current = margins.margin_values().detach().clone()
@@ -161,13 +212,16 @@ def fit_all(
         "final_epoch": epoch, "final_train": metrics, "margins": margin_state,
         "batches_per_epoch": len(loader), "optimizer_steps": epoch * len(loader),
     }
+    if every_epochs or every_steps:
+        summary["periodic_test_evaluations"] = len(periodic)
     if "balanced_softmax" in run_metadata:
         summary["balanced_softmax"] = run_metadata["balanced_softmax"]
     return model, amp, summary
 
 
 @torch.no_grad()
-def evaluate_seen_test(model, frame, manifest, cfg, output, device, amp):
+def evaluate_seen_test(model, frame, manifest, cfg, output, device, amp, *, checkpoint_name="final.pt",
+                       epoch=None, iteration=None, periodic=False):
     """Re-evaluate the original test subset, whose labels were used for training."""
     model.eval()
     predictions, labels, ids = [], [], []
@@ -183,7 +237,10 @@ def evaluate_seen_test(model, frame, manifest, cfg, output, device, amp):
     classes = np.rint(predictions).clip(0, 4).astype(int)
     payload = {
         "dataset": "IDRiD", "protocol": PROTOCOL,
-        "evaluation_split": "official_test_used_for_training", "checkpoint": "final.pt",
+        "evaluation_split": "official_test_used_for_training", "checkpoint": checkpoint_name,
+        "epoch": epoch, "batch_iteration": iteration,
+        "evaluation_kind": "periodic" if periodic else "final",
+        "weights_source": "in_memory_after_iteration" if periodic else checkpoint_name,
         "official_test_used_for_training": True, "evaluation_is_independent": False,
         "metric_interpretation": "Training-data resubstitution; NOT held-out generalization or a comparable CLOC test result.",
         "synthetic_smoke_test": not manifest["official_split_verified"],
@@ -199,9 +256,12 @@ def evaluate_seen_test(model, frame, manifest, cfg, output, device, amp):
             (image_id, label, prediction, int(grade), abs(int(grade) - label), True)
             for image_id, label, prediction, grade in zip(ids, labels, predictions, classes)
         )
-    print(NOTICE, flush=True)
+    if not periodic:
+        print(NOTICE, flush=True)
+    scope = f"PERIODIC TRAIN-SEEN TEST epoch={epoch} iteration={iteration}" if periodic else "IDRiD TRAIN-SEEN test subset (NOT independent)"
     print(
-        f"IDRiD TRAIN-SEEN test subset (NOT independent): Accuracy={metrics['accuracy_percent']:.2f}% "
+        f"{scope}: Accuracy={metrics['accuracy_percent']:.2f}% "
+        f"Macro={100*metrics['macro_accuracy']:.2f}% QWK={metrics['quadratic_weighted_kappa']:.4f} "
         f"MAE={metrics['mae']:.4f} N={metrics['samples']}", flush=True,
     )
     hybrid.report_per_class(metrics, output, split_label="TRAIN-SEEN test")
@@ -262,10 +322,12 @@ def run(cfg, *, allow_synthetic=False, allow_test_training=False):
         f"PCOL={cfg['loss']['alpha']} SCOLw={cfg['loss']['beta']} "
         f"RMSE={cfg['loss']['rmse_weight']} MMNP={cfg['loss']['mmnp_weight']}", flush=True,
     )
-    model, amp, summary = fit_all(training, manifest, cfg, output, device)
+    periodic_options = {"periodic_test_frame": frames["test"]} if (cfg["train"].get("test_every_epochs") or cfg["train"].get("test_every_steps")) else {}
+    model, amp, summary = fit_all(training, manifest, cfg, output, device, **periodic_options)
     checkpoint = torch.load(output / "final.pt", map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model"], strict=True)
-    payload = evaluate_seen_test(model, frames["test"], manifest, cfg, output, device, amp)
+    payload = evaluate_seen_test(model, frames["test"], manifest, cfg, output, device, amp,
+                                 epoch=int(checkpoint["epoch"]), iteration=int(checkpoint["optimizer_steps"]))
     payload.update(summary, checkpoint_selection="final_epoch")
     save_json(output / "evaluation_metrics.json", payload)
     metrics = json.loads((output / "metrics.json").read_text(encoding="utf-8"))
@@ -282,6 +344,9 @@ def main():
     parser.add_argument("--device")
     parser.add_argument("--num-workers", type=int)
     parser.add_argument("--epochs", type=int)
+    period = parser.add_mutually_exclusive_group()
+    period.add_argument("--test-every-epochs", type=int)
+    period.add_argument("--test-every-steps", type=int, help="Interval in training mini-batch iterations, not epochs.")
     parser.add_argument("--allow-test-training", action="store_true", help="Explicitly run the legacy non-independent diagnostic; never a held-out test")
     args = parser.parse_args()
     if not args.allow_test_training:
@@ -290,6 +355,7 @@ def main():
     for name, section, key in (
         ("data_dir", "data", "data_dir"), ("output_dir", "train", "output_dir"),
         ("num_workers", "data", "num_workers"), ("epochs", "train", "epochs"),
+        ("test_every_epochs", "train", "test_every_epochs"), ("test_every_steps", "train", "test_every_steps"),
     ):
         value = getattr(args, name)
         if value is not None:
